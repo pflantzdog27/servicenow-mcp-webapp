@@ -89,13 +89,15 @@ const ToolInvocation: React.FC<ToolInvocationProps> = ({ toolCall }) => {
   const serviceNowLink = sysId ? generateServiceNowLink(sysId) : null;
 
   return (
-    <div className={`border rounded-lg p-4 transition-all ${getStatusColor()}`}>
-      <div className="flex items-center justify-between mb-2">
-        <div className="flex items-center space-x-2">
+    <div className={`border rounded-lg p-4 transition-all ${getStatusColor()} mb-3`}>
+      <div className="flex items-center justify-between mb-3">
+        <div className="flex items-center space-x-3">
           {getStatusIcon()}
-          <span className="font-medium text-white">{toolCall.name}</span>
+          <div>
+            <span className="font-medium text-white text-lg">{toolCall.name.replace(/-/g, ' ').replace(/\b\w/g, l => l.toUpperCase())}</span>
+            <div className="text-sm text-gray-400">{getStatusText()}</div>
+          </div>
         </div>
-        <span className="text-sm text-gray-400">{getStatusText()}</span>
       </div>
       
       {/* Arguments */}

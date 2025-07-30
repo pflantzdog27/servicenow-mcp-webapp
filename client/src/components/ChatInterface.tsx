@@ -217,9 +217,12 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({ socket, selectedModel }) 
           ))
         )}
         {isLoading && (
-          <div className="flex items-center space-x-2 text-gray-400">
-            <Loader2 className="w-4 h-4 animate-spin" />
-            <span>Thinking...</span>
+          <div className="flex items-center space-x-2 text-gray-400 bg-surface-light rounded-lg p-4">
+            <Loader2 className="w-5 h-5 animate-spin text-primary" />
+            <div className="flex flex-col">
+              <span className="text-white font-medium">ServiceNow AI Assistant</span>
+              <span className="text-sm">Analyzing your request and planning workflow...</span>
+            </div>
           </div>
         )}
         <div ref={messagesEndRef} />
