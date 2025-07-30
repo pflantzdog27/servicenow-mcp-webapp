@@ -45,11 +45,13 @@ export class ChatHandler {
 
   async handleMessage(socket: Socket, data: { message: string; model?: string }): Promise<void> {
     const socketId = socket.id;
+    logger.info(`Handling message from ${socketId}:`, { message: data.message, model: data.model });
     
     // Get or create session
     let session = this.sessions.get(socketId);
     if (!session) {
-      const model = data.model || 'claude-3-sonnet-20240229';
+      const model = data.model || 'claude-sonnet-4-20250514';
+      logger.info(`Creating new session with model: ${model}`);
       session = this.createSession(model);
       this.sessions.set(socketId, session);
     }
@@ -63,8 +65,7 @@ export class ChatHandler {
     };
     session.messages.push(userMessage);
 
-    // Emit user message confirmation
-    socket.emit('chat:message', userMessage);
+    // No need to emit user message back - frontend already has it
 
     try {
       // Generate AI response with streaming
@@ -78,6 +79,7 @@ export class ChatHandler {
       };
 
       // Start streaming response
+      logger.info(`Starting stream for message: ${assistantMessage.id}`);
       socket.emit('chat:stream_start', { messageId: assistantMessage.id });
 
       const llmMessages: LLMMessage[] = session.messages.map(msg => ({
@@ -88,6 +90,7 @@ export class ChatHandler {
       const response = await session.llmService.generateResponse(
         llmMessages,
         (chunk) => {
+          logger.info(`Streaming chunk: ${chunk.type} - ${chunk.content?.substring(0, 50)}...`);
           if (chunk.type === 'text') {
             assistantMessage.content += chunk.content;
             socket.emit('chat:stream', {
@@ -156,10 +159,12 @@ export class ChatHandler {
 
       // Finalize message
       session.messages.push(assistantMessage);
+      logger.info(`Finalizing message: ${assistantMessage.id} with content length: ${assistantMessage.content.length}`);
       socket.emit('chat:stream_complete', {
         messageId: assistantMessage.id,
         message: assistantMessage
       });
+      logger.info(`Stream complete event sent for message: ${assistantMessage.id}`);
 
       // Emit activity log
       if (assistantMessage.toolCalls && assistantMessage.toolCalls.length > 0) {
@@ -194,13 +199,13 @@ export class ChatHandler {
   }
 
   private createLLMService(model: string): LLMService {
-    if (model.startsWith('gpt-')) {
+    if (model.startsWith('gpt-') || model.startsWith('o4-')) {
       return new OpenAIService(model);
     } else if (model.startsWith('claude-')) {
       return new AnthropicService(model);
     } else {
-      // Default to Claude Sonnet
-      return new AnthropicService('claude-3-sonnet-20240229');
+      // Default to Claude 4 Sonnet
+      return new AnthropicService('claude-sonnet-4-20250514');
     }
   }
 

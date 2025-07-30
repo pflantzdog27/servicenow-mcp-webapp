@@ -1,6 +1,5 @@
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js';
-import { CallToolRequestSchema, ListToolsRequestSchema } from '@modelcontextprotocol/sdk/types.js';
 import { createLogger } from '../utils/logger';
 
 const logger = createLogger();
@@ -68,10 +67,8 @@ export class MCPClientManager {
     if (!this.client) throw new Error('MCP client not initialized');
 
     try {
-      const response = await this.client.request(
-        { method: "tools/list", params: {} },
-        ListToolsRequestSchema
-      );
+      // Use the listTools method instead of direct request
+      const response = await this.client.listTools();
 
       this.availableTools = response.tools.map(tool => ({
         name: tool.name,
@@ -79,7 +76,7 @@ export class MCPClientManager {
         inputSchema: tool.inputSchema
       }));
 
-      logger.info(`Loaded ${this.availableTools.length} ServiceNow MCP tools`);
+      logger.info(`Loaded ${this.availableTools.length} ServiceNow MCP tools: ${this.availableTools.map(t => t.name).join(', ')}`);
     } catch (error) {
       logger.error('Failed to fetch available tools:', error);
       // Continue without tools - the app can still work for basic chat
@@ -117,22 +114,17 @@ export class MCPClientManager {
     try {
       logger.info(`Executing MCP tool: ${toolCall.name}`, { arguments: toolCall.arguments });
       
-      const response = await this.client.request(
-        {
-          method: "tools/call",
-          params: {
-            name: toolCall.name,
-            arguments: toolCall.arguments
-          }
-        },
-        CallToolRequestSchema
-      );
+      // Use the callTool method instead of direct request
+      const response = await this.client.callTool({
+        name: toolCall.name,
+        arguments: toolCall.arguments
+      });
 
       logger.info(`MCP tool ${toolCall.name} completed successfully`);
       
       return {
-        content: response.content,
-        isError: response.isError || false
+        content: Array.isArray(response.content) ? response.content : [{ type: 'text', text: String(response.content || '') }],
+        isError: !!response.isError
       };
     } catch (error) {
       logger.error(`MCP tool ${toolCall.name} failed:`, error);

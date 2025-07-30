@@ -8,12 +8,20 @@ export class AnthropicService extends LLMService {
   private client: Anthropic;
   private model: string;
 
-  constructor(model: string = 'claude-3-sonnet-20240229') {
+  constructor(model: string = 'claude-sonnet-4-20250514') {
     super();
     this.model = model;
+    
+    if (!process.env.ANTHROPIC_API_KEY) {
+      throw new Error('ANTHROPIC_API_KEY environment variable is required');
+    }
+    
+    logger.info(`Initializing Anthropic client for model: ${model}`);
     this.client = new Anthropic({
       apiKey: process.env.ANTHROPIC_API_KEY,
     });
+    
+    logger.info(`Anthropic client initialized successfully`);
   }
 
   async generateResponse(
@@ -26,9 +34,9 @@ export class AnthropicService extends LLMService {
       // Filter out system messages from the messages array (Anthropic handles system separately)
       const userMessages = messages.filter(msg => msg.role !== 'system');
       
-      const stream = await this.client.messages.create({
+      const stream = await (this.client as any).messages.create({
         model: this.model,
-        max_tokens: 2000,
+        max_tokens: 200000, // ~$5 safety limit for Claude ($3/MTok input + $15/MTok output)
         temperature: 0.7,
         system: systemMessage,
         messages: userMessages.map(msg => ({
@@ -69,8 +77,13 @@ export class AnthropicService extends LLMService {
       };
 
     } catch (error) {
-      logger.error('Anthropic API error:', error);
-      throw new Error(`Anthropic request failed: ${error}`);
+      logger.error('Anthropic API error details:', {
+        error: error,
+        model: this.model,
+        messageCount: messages.length,
+        hasApiKey: !!process.env.ANTHROPIC_API_KEY
+      });
+      throw new Error(`Anthropic request failed: ${error instanceof Error ? error.message : error}`);
     }
   }
 

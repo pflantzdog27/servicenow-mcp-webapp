@@ -6,7 +6,7 @@ import ActivityPanel from './components/ActivityPanel';
 import { useWebSocket } from './hooks/useWebSocket';
 
 function App() {
-  const [selectedModel, setSelectedModel] = useState('claude-3-sonnet-20240229');
+  const [selectedModel, setSelectedModel] = useState('gpt-4');
   const socket = useWebSocket();
 
   return (

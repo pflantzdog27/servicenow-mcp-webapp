@@ -55,17 +55,42 @@ You can make multiple tool calls in sequence if needed.
 
   protected parseToolCalls(content: string): MCPToolCall[] {
     const toolCalls: MCPToolCall[] = [];
-    const toolCallRegex = /TOOL_CALL:\s*({[^}]+})/g;
+    // More flexible regex to catch complete JSON objects
+    const toolCallRegex = /TOOL_CALL:\s*({[^}]*})/g;
     let match;
 
     while ((match = toolCallRegex.exec(content)) !== null) {
       try {
-        const toolCall = JSON.parse(match[1]);
-        if (toolCall.name && toolCall.arguments) {
+        let jsonStr = match[1];
+        
+        // Try to fix incomplete JSON by adding missing closing braces
+        const openBraces = (jsonStr.match(/{/g) || []).length;
+        const closeBraces = (jsonStr.match(/}/g) || []).length;
+        
+        if (openBraces > closeBraces) {
+          // Add missing closing braces
+          jsonStr += '}'.repeat(openBraces - closeBraces);
+        }
+        
+        const toolCall = JSON.parse(jsonStr);
+        if (toolCall.name) {
+          // Default arguments to empty object if missing
+          if (!toolCall.arguments) {
+            toolCall.arguments = {};
+          }
           toolCalls.push(toolCall);
         }
       } catch (error) {
-        console.warn('Failed to parse tool call:', match[1]);
+        console.warn('Failed to parse tool call:', match[1], error);
+        
+        // Try to extract tool name even from incomplete JSON
+        const nameMatch = match[1].match(/"name":\s*"([^"]+)"/);
+        if (nameMatch) {
+          toolCalls.push({
+            name: nameMatch[1],
+            arguments: {}
+          });
+        }
       }
     }
 
