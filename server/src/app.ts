@@ -6,8 +6,13 @@ import dotenv from 'dotenv';
 import { MCPClientManager } from './mcp/mcp-client';
 import { ChatHandler } from './websocket/chat-handler';
 import { StreamHandler } from './websocket/stream-handler';
+import { authenticateSocket, AuthenticatedSocket } from './middleware/socketAuth';
 import { createLogger } from './utils/logger';
 import authRoutes from './routes/auth';
+import projectRoutes from './routes/projects';
+import documentRoutes from './routes/documents';
+import activityRoutes from './routes/activity';
+import chatRoutes from './routes/chats';
 
 dotenv.config();
 
@@ -29,6 +34,10 @@ app.use(express.json());
 
 // Routes
 app.use('/api/auth', authRoutes);
+app.use('/api/projects', projectRoutes);
+app.use('/api/documents', documentRoutes);
+app.use('/api/activity', activityRoutes);
+app.use('/api/chats', chatRoutes);
 
 // Health check endpoint
 app.get('/api/health', (req, res) => {
@@ -40,13 +49,19 @@ const mcpClientManager = new MCPClientManager();
 const chatHandler = new ChatHandler(mcpClientManager);
 const streamHandler = new StreamHandler();
 
+// Socket.io authentication middleware
+io.use(authenticateSocket);
+
 // Socket.io connection handling
-io.on('connection', (socket) => {
-  logger.info(`Client connected: ${socket.id}`);
+io.on('connection', (socket: AuthenticatedSocket) => {
+  logger.info(`Client connected: ${socket.id} (User: ${socket.user?.email})`);
 
   // Handle chat messages
   socket.on('chat:message', async (data) => {
     try {
+      if (!socket.user) {
+        return socket.emit('error', { message: 'Authentication required' });
+      }
       await chatHandler.handleMessage(socket, data);
     } catch (error) {
       logger.error('Error handling chat message:', error);
@@ -55,8 +70,11 @@ io.on('connection', (socket) => {
   });
 
   // Handle model selection
-  socket.on('chat:select_model', (data) => {
-    chatHandler.setModel(socket.id, data.model);
+  socket.on('chat:select_model', async (data) => {
+    if (!socket.user) {
+      return socket.emit('error', { message: 'Authentication required' });
+    }
+    await chatHandler.setModel(socket.id, data.model, socket.user.userId);
     socket.emit('chat:model_selected', { model: data.model });
   });
 

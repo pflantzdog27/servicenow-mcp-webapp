@@ -20,9 +20,60 @@ model User {
   updatedAt DateTime @updatedAt
 
   // Relations
+  projects     Project[]
   chatSessions ChatSession[]
 
   @@map("users")
+}
+
+model Project {
+  id          String   @id @default(cuid())
+  userId      String
+  name        String
+  description String?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  // Relations
+  user         User           @relation(fields: [userId], references: [id], onDelete: Cascade)
+  documents    Document[]
+  chatSessions ChatSession[]
+
+  @@map("projects")
+}
+
+model Document {
+  id               String            @id @default(cuid())
+  projectId        String
+  filename         String
+  originalName     String
+  contentType      String
+  fileSize         Int
+  content          String?           // Extracted text content
+  chunkCount       Int               @default(0)
+  processingStatus ProcessingStatus  @default(UPLOADING)
+  errorMessage     String?
+  createdAt        DateTime          @default(now())
+
+  // Relations
+  project Project       @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  chunks  DocumentChunk[]
+
+  @@map("documents")
+}
+
+model DocumentChunk {
+  id         String   @id @default(cuid())
+  documentId String
+  content    String
+  chunkIndex Int
+  embedding  String?  // JSON string of embedding vector
+  createdAt  DateTime @default(now())
+
+  // Relations
+  document Document @relation(fields: [documentId], references: [id], onDelete: Cascade)
+
+  @@map("document_chunks")
 }
 
 model ChatSession {
@@ -31,12 +82,14 @@ model ChatSession {
   model            String
   totalTokensUsed  Int      @default(0)
   contextLimit     Int
+  projectId        String?  // Optional - can be null for general chats
   createdAt        DateTime @default(now())
   updatedAt        DateTime @updatedAt
 
   // Relations
   userId   String
   user     User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  project  Project?  @relation(fields: [projectId], references: [id], onDelete: SetNull)
   messages Message[]
 
   @@map("chat_sessions")
@@ -48,6 +101,7 @@ model Message {
   content    String
   tokenCount Int         @default(0)
   model      String?
+  sources    String?     // JSON array of source citations
   createdAt  DateTime    @default(now())
 
   // Relations
@@ -89,6 +143,13 @@ enum MessageRole {
 enum ToolExecutionStatus {
   QUEUED
   EXECUTING
+  COMPLETED
+  FAILED
+}
+
+enum ProcessingStatus {
+  UPLOADING
+  PROCESSING
   COMPLETED
   FAILED
 }

@@ -55,21 +55,29 @@ You can make multiple tool calls in sequence if needed.
 
   protected parseToolCalls(content: string): MCPToolCall[] {
     const toolCalls: MCPToolCall[] = [];
-    // More flexible regex to catch complete JSON objects
-    const toolCallRegex = /TOOL_CALL:\s*({[^}]*})/g;
+    // More flexible regex to catch complete JSON objects with nested braces
+    const toolCallRegex = /TOOL_CALL:\s*({.*?})/g;
     let match;
 
     while ((match = toolCallRegex.exec(content)) !== null) {
       try {
         let jsonStr = match[1];
         
-        // Try to fix incomplete JSON by adding missing closing braces
-        const openBraces = (jsonStr.match(/{/g) || []).length;
-        const closeBraces = (jsonStr.match(/}/g) || []).length;
+        // Find the complete JSON object by counting braces
+        let braceCount = 0;
+        let endIndex = 0;
         
-        if (openBraces > closeBraces) {
-          // Add missing closing braces
-          jsonStr += '}'.repeat(openBraces - closeBraces);
+        for (let i = 0; i < jsonStr.length; i++) {
+          if (jsonStr[i] === '{') braceCount++;
+          if (jsonStr[i] === '}') braceCount--;
+          if (braceCount === 0) {
+            endIndex = i + 1;
+            break;
+          }
+        }
+        
+        if (endIndex > 0) {
+          jsonStr = jsonStr.substring(0, endIndex);
         }
         
         const toolCall = JSON.parse(jsonStr);
@@ -98,6 +106,7 @@ You can make multiple tool calls in sequence if needed.
   }
 
   protected removeToolCallsFromContent(content: string): string {
-    return content.replace(/TOOL_CALL:\s*{[^}]+}/g, '').trim();
+    // Remove complete tool calls including nested JSON objects
+    return content.replace(/TOOL_CALL:\s*{.*?}/g, '').trim();
   }
 }

@@ -1,12 +1,17 @@
 import { Socket } from 'socket.io';
+import { PrismaClient, ToolExecutionStatus } from '@prisma/client';
 import { MCPClientManager } from '../mcp/mcp-client';
 import { LLMService, LLMMessage } from '../llm/llm-interface';
 import { OpenAIService } from '../llm/openai-service';
 import { AnthropicService } from '../llm/anthropic-service';
+import { ActivityService } from '../services/activity';
+import { ChatService } from '../services/chat';
+import { AuthenticatedSocket } from '../middleware/socketAuth';
 import { createLogger } from '../utils/logger';
 import { v4 as uuidv4 } from 'uuid';
 
 const logger = createLogger();
+const prisma = new PrismaClient();
 
 export interface ChatMessage {
   id: string;
@@ -21,20 +26,25 @@ export interface ChatSession {
   messages: ChatMessage[];
   model: string;
   llmService: LLMService;
+  dbSessionId?: string;
 }
 
 export class ChatHandler {
   private sessions: Map<string, ChatSession> = new Map();
   private mcpClientManager: MCPClientManager;
+  private activityService: ActivityService;
+  private chatService: ChatService;
 
   constructor(mcpClientManager: MCPClientManager) {
     this.mcpClientManager = mcpClientManager;
+    this.activityService = new ActivityService();
+    this.chatService = new ChatService();
   }
 
-  setModel(socketId: string, model: string): void {
+  async setModel(socketId: string, model: string, userId: string): Promise<void> {
     let session = this.sessions.get(socketId);
     if (!session) {
-      session = this.createSession(model);
+      session = await this.createSession(model, userId);
       this.sessions.set(socketId, session);
     } else {
       session.model = model;
@@ -43,37 +53,62 @@ export class ChatHandler {
     }
   }
 
-  async handleMessage(socket: Socket, data: { message: string; model?: string }): Promise<void> {
+  async handleMessage(socket: AuthenticatedSocket, data: { message: string; model?: string }): Promise<void> {
     const socketId = socket.id;
+    const userId = socket.user!.userId;
     logger.info(`Handling message from ${socketId}:`, { message: data.message, model: data.model });
     
-    // Get or create session
-    let session = this.sessions.get(socketId);
-    if (!session) {
-      const model = data.model || 'claude-sonnet-4-20250514';
-      logger.info(`Creating new session with model: ${model}`);
-      session = this.createSession(model);
-      this.sessions.set(socketId, session);
-    }
-
-    // Add user message
-    const userMessage: ChatMessage = {
-      id: uuidv4(),
-      role: 'user',
-      content: data.message,
-      timestamp: new Date()
-    };
-    session.messages.push(userMessage);
-
-    // No need to emit user message back - frontend already has it
-
     try {
+      // Get or create session
+      let session = this.sessions.get(socketId);
+      if (!session) {
+        const model = data.model || 'claude-sonnet-4-20250514';
+        logger.info(`Creating new session with model: ${model}`);
+        session = await this.createSession(model, userId);
+        this.sessions.set(socketId, session);
+      }
+
+      // Create user message in database
+      const userDbMessage = await prisma.message.create({
+        data: {
+          role: 'USER',
+          content: data.message,
+          sessionId: session.dbSessionId!,
+          model: session.model
+        }
+      });
+
+      // Add user message to in-memory session
+      const userMessage: ChatMessage = {
+        id: userDbMessage.id,
+        role: 'user',
+        content: data.message,
+        timestamp: userDbMessage.createdAt
+      };
+      session.messages.push(userMessage);
+
+      // Auto-generate session title from first message if needed
+      if (session.messages.length === 1) {
+        await this.chatService.updateSessionTitle(session.dbSessionId!, userId, '');
+      }
+
+      // No need to emit user message back - frontend already has it
+
       // Generate AI response with streaming
+      const assistantDbMessage = await prisma.message.create({
+        data: {
+          role: 'ASSISTANT',
+          content: '',
+          sessionId: session.dbSessionId!,
+          model: session.model
+        }
+      });
+
       const assistantMessage: ChatMessage = {
-        id: uuidv4(),
+        id: assistantDbMessage.id,
         role: 'assistant',
         content: '',
-        timestamp: new Date(),
+        timestamp: assistantDbMessage.createdAt,
         toolCalls: [],
         model: session.model
       };
@@ -109,7 +144,18 @@ export class ChatHandler {
         assistantMessage.toolCalls = [];
 
         for (const toolCall of response.toolCalls) {
+          let toolExecution;
           try {
+            // Create tool execution record
+            toolExecution = await prisma.toolExecution.create({
+              data: {
+                messageId: assistantMessage.id,
+                toolName: toolCall.name,
+                arguments: JSON.stringify(toolCall.arguments),
+                status: ToolExecutionStatus.EXECUTING
+              }
+            });
+
             // Emit tool execution start
             socket.emit('chat:tool_start', {
               messageId: assistantMessage.id,
@@ -119,6 +165,15 @@ export class ChatHandler {
 
             // Execute the tool
             const toolResult = await this.mcpClientManager.executeTool(toolCall);
+            
+            // Update tool execution with result
+            await prisma.toolExecution.update({
+              where: { id: toolExecution.id },
+              data: {
+                result: JSON.stringify(toolResult),
+                status: toolResult.isError ? ToolExecutionStatus.FAILED : ToolExecutionStatus.COMPLETED
+              }
+            });
             
             // Add to tool calls array
             assistantMessage.toolCalls.push({
@@ -148,6 +203,18 @@ export class ChatHandler {
 
           } catch (error) {
             logger.error(`Tool execution failed: ${toolCall.name}`, error);
+            
+            // Update tool execution with error if it was created
+            if (toolExecution) {
+              await prisma.toolExecution.update({
+                where: { id: toolExecution.id },
+                data: {
+                  status: ToolExecutionStatus.FAILED,
+                  error: error instanceof Error ? error.message : 'Unknown error'
+                }
+              });
+            }
+            
             socket.emit('chat:tool_error', {
               messageId: assistantMessage.id,
               toolName: toolCall.name,
@@ -156,6 +223,14 @@ export class ChatHandler {
           }
         }
       }
+
+      // Update assistant message content in database
+      await prisma.message.update({
+        where: { id: assistantMessage.id },
+        data: {
+          content: assistantMessage.content
+        }
+      });
 
       // Finalize message
       session.messages.push(assistantMessage);
@@ -187,15 +262,34 @@ export class ChatHandler {
     }
   }
 
-  private createSession(model: string): ChatSession {
+  private async createSession(model: string, userId: string): Promise<ChatSession> {
     const llmService = this.createLLMService(model);
     llmService.setAvailableTools(this.mcpClientManager.getAvailableTools());
+    
+    // Create database session
+    const dbSession = await prisma.chatSession.create({
+      data: {
+        userId,
+        model,
+        contextLimit: this.getContextLimit(model),
+        title: 'New Chat'
+      }
+    });
     
     return {
       messages: [],
       model,
-      llmService
+      llmService,
+      dbSessionId: dbSession.id
     };
+  }
+
+  private getContextLimit(model: string): number {
+    if (model.startsWith('gpt-4')) return 8000;
+    if (model.startsWith('gpt-3.5')) return 4000;
+    if (model.startsWith('o4-')) return 128000;
+    if (model.startsWith('claude-')) return 200000;
+    return 4000; // default
   }
 
   private createLLMService(model: string): LLMService {
