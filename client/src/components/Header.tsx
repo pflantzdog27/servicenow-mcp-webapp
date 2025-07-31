@@ -12,6 +12,7 @@ interface HeaderProps {
   onViewChange: (view: 'chat' | 'projects') => void;
 }
 
+// Updated models - only Anthropic options
 const models = [
   { id: 'claude-opus-4-20250514', name: 'Claude Opus 4', provider: 'Anthropic' },
   { id: 'claude-sonnet-4-20250514', name: 'Claude Sonnet 4', provider: 'Anthropic' },

@@ -2,39 +2,47 @@ import React, { useState, useEffect } from 'react';
 import { useNavigate, useOutletContext } from 'react-router-dom';
 import { MessageSquare, Calendar, Search } from 'lucide-react';
 import { Socket } from 'socket.io-client';
+import chatService, { ChatSession as ChatSessionType } from '../services/chat';
+import { useAuth } from '../contexts/AuthContext';
 
 interface OutletContext {
   socket: Socket | null;
   selectedModel: string;
 }
 
-interface ChatSession {
-  id: string;
-  title: string;
-  preview: string;
-  lastMessage: Date;
-  messageCount: number;
-}
-
 function ChatHistoryView() {
   const navigate = useNavigate();
   const { socket } = useOutletContext<OutletContext>();
-  const [sessions, setSessions] = useState<ChatSession[]>([]);
+  const { isAuthenticated } = useAuth();
+  const [sessions, setSessions] = useState<ChatSessionType[]>([]);
   const [searchQuery, setSearchQuery] = useState('');
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
-    // TODO: Fetch chat history from backend
-    // No demo data - start with empty state
-    setTimeout(() => {
-      setSessions([]);
+    if (!isAuthenticated) {
       setLoading(false);
-    }, 500);
-  }, []);
+      return;
+    }
+
+    const fetchChatHistory = async () => {
+      try {
+        console.log('🔄 Fetching chat history...');
+        const chatSessions = await chatService.getSessions(50, 0);
+        console.log('✅ Chat sessions loaded:', chatSessions);
+        setSessions(chatSessions);
+      } catch (error) {
+        console.error('❌ Error fetching chat history:', error);
+        setSessions([]);
+      } finally {
+        setLoading(false);
+      }
+    };
+
+    fetchChatHistory();
+  }, [isAuthenticated]);
 
   const filteredSessions = sessions.filter(session =>
-    session.title.toLowerCase().includes(searchQuery.toLowerCase()) ||
-    session.preview.toLowerCase().includes(searchQuery.toLowerCase())
+    session.title.toLowerCase().includes(searchQuery.toLowerCase())
   );
 
   const formatDate = (date: Date) => {
@@ -86,15 +94,15 @@ function ChatHistoryView() {
                       {session.title}
                     </h3>
                     <span className="text-sm text-gray-400 whitespace-nowrap">
-                      {formatDate(session.lastMessage)}
+                      {formatDate(session.updatedAt)}
                     </span>
                   </div>
                   <p className="text-sm text-gray-400 line-clamp-2 mb-2">
-                    {session.preview}
+                    {session.model} • Created {formatDate(session.createdAt)}
                   </p>
                   <div className="flex items-center text-xs text-gray-500">
                     <MessageSquare className="w-3 h-3 mr-1" />
-                    {session.messageCount} messages
+                    {session._count?.messages || 0} messages
                   </div>
                 </button>
               ))}
