@@ -3,9 +3,11 @@ import Header from './components/Header';
 import Sidebar from './components/Sidebar';
 import ChatInterface from './components/ChatInterface';
 import ActivityPanel from './components/ActivityPanel';
+import AuthWrapper from './components/auth/AuthWrapper';
+import { AuthProvider } from './contexts/AuthContext';
 import { useWebSocket } from './hooks/useWebSocket';
 
-function App() {
+function AppContent() {
   const [selectedModel, setSelectedModel] = useState('gpt-4');
   const socket = useWebSocket();
 
@@ -39,6 +41,16 @@ function App() {
         </div>
       </div>
     </div>
+  );
+}
+
+function App() {
+  return (
+    <AuthProvider>
+      <AuthWrapper>
+        <AppContent />
+      </AuthWrapper>
+    </AuthProvider>
   );
 }
 

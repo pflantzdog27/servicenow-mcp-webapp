@@ -1,6 +1,7 @@
-import React from 'react';
+import React, { useState } from 'react';
 import { Socket } from 'socket.io-client';
-import { Bot, ChevronDown } from 'lucide-react';
+import { Bot, ChevronDown, User, LogOut, Settings } from 'lucide-react';
+import { useAuth } from '../contexts/AuthContext';
 
 interface HeaderProps {
   selectedModel: string;

@@ -1,0 +1,94 @@
+// ServiceNow MCP Web Application Database Schema
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = env("DATABASE_URL")
+}
+
+model User {
+  id        String   @id @default(cuid())
+  email     String   @unique
+  name      String?
+  password  String
+  avatar    String?
+  role      Role     @default(USER)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  // Relations
+  chatSessions ChatSession[]
+
+  @@map("users")
+}
+
+model ChatSession {
+  id               String   @id @default(cuid())
+  title            String?
+  model            String
+  totalTokensUsed  Int      @default(0)
+  contextLimit     Int
+  createdAt        DateTime @default(now())
+  updatedAt        DateTime @updatedAt
+
+  // Relations
+  userId   String
+  user     User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  messages Message[]
+
+  @@map("chat_sessions")
+}
+
+model Message {
+  id         String      @id @default(cuid())
+  role       MessageRole
+  content    String
+  tokenCount Int         @default(0)
+  model      String?
+  createdAt  DateTime    @default(now())
+
+  // Relations
+  sessionId      String
+  session        ChatSession     @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+  toolExecutions ToolExecution[]
+
+  @@map("messages")
+}
+
+model ToolExecution {
+  id        String               @id @default(cuid())
+  toolName  String
+  arguments String // JSON string
+  result    String? // JSON string
+  status    ToolExecutionStatus
+  error     String?
+  createdAt DateTime             @default(now())
+  updatedAt DateTime             @updatedAt
+
+  // Relations
+  messageId String
+  message   Message @relation(fields: [messageId], references: [id], onDelete: Cascade)
+
+  @@map("tool_executions")
+}
+
+enum Role {
+  USER
+  ADMIN
+}
+
+enum MessageRole {
+  USER
+  ASSISTANT
+  SYSTEM
+}
+
+enum ToolExecutionStatus {
+  QUEUED
+  EXECUTING
+  COMPLETED
+  FAILED
+}
