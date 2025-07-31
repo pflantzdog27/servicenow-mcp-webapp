@@ -4,7 +4,7 @@ import Header from '../components/Header';
 import { useWebSocket } from '../hooks/useWebSocket';
 
 function MainLayout() {
-  const [selectedModel, setSelectedModel] = useState('gpt-4');
+  const [selectedModel, setSelectedModel] = useState('claude-sonnet-4-20250514');
   const socket = useWebSocket();
   const location = useLocation();
   const navigate = useNavigate();

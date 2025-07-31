@@ -13,13 +13,10 @@ interface HeaderProps {
 }
 
 const models = [
-  { id: 'claude-3-5-sonnet-latest', name: 'Claude Sonnet 4', provider: 'Anthropic' },
-  { id: 'claude-3-5-sonnet-20241022', name: 'Claude 3.5 Sonnet', provider: 'Anthropic' },
-  { id: 'claude-3-opus-latest', name: 'Claude 3 Opus', provider: 'Anthropic' },
-  { id: 'o1-mini', name: 'o1-mini', provider: 'OpenAI' },
-  { id: 'gpt-4o', name: 'GPT-4o', provider: 'OpenAI' },
-  { id: 'gpt-4', name: 'GPT-4', provider: 'OpenAI' },
-  { id: 'gpt-3.5-turbo', name: 'GPT-3.5 Turbo', provider: 'OpenAI' },
+  { id: 'claude-opus-4-20250514', name: 'Claude Opus 4', provider: 'Anthropic' },
+  { id: 'claude-sonnet-4-20250514', name: 'Claude Sonnet 4', provider: 'Anthropic' },
+  { id: 'claude-3-7-sonnet-20250219', name: 'Claude Sonnet 3.7', provider: 'Anthropic' },
+  { id: 'claude-3-5-haiku-20241022', name: 'Claude Haiku 3.5', provider: 'Anthropic' },
 ];
 
 const Header: React.FC<HeaderProps> = ({ selectedModel, onModelChange, socket, view, onViewChange }) => {

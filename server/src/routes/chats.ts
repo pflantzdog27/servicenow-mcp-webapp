@@ -59,7 +59,7 @@ router.post('/', authenticateToken, async (req, res) => {
 
     const session = await chatService.createSession(req.user.userId, {
       title: title || 'New Chat',
-      model: model || 'claude-3-5-sonnet-latest'
+      model: model || 'claude-sonnet-4-20250514'
     });
     
     res.status(201).json({ session });

@@ -60,69 +60,8 @@ export class ChatHandler {
   }
 
   async handleMessage(socket: AuthenticatedSocket, data: { message: string; model?: string }): Promise<void> {
-    const socketId = socket.id;
-    const userId = socket.user!.userId;
-    logger.info(`Enhanced chat handler processing message from ${socketId}:`, { message: data.message, model: data.model });
-    
-    try {
-      // Get or create session
-      let session = this.sessions.get(socketId);
-      if (!session) {
-        const model = data.model || 'claude-3-5-sonnet-latest';
-        logger.info(`Creating new session with model: ${model}`);
-        session = await this.createSession(model, userId);
-        this.sessions.set(socketId, session);
-      }
-
-      // Create user message in database
-      const userDbMessage = await prisma.message.create({
-        data: {
-          role: 'USER',
-          content: data.message,
-          sessionId: session.dbSessionId!,
-          model: session.model
-        }
-      });
-
-      // Create assistant message in database
-      const assistantDbMessage = await prisma.message.create({
-        data: {
-          role: 'ASSISTANT',
-          content: '',
-          sessionId: session.dbSessionId!,
-          model: session.model
-        }
-      });
-
-      // Use the context-aware handler for enhanced processing
-      await this.contextAwareHandler.processMessage(
-        socket,
-        assistantDbMessage.id,
-        data.message,
-        session.llmService,
-        session.model
-      );
-
-      // Auto-generate session title from first message if needed
-      if (session.messages.length === 0) {
-        await this.chatService.updateSessionTitle(session.dbSessionId!, userId, '');
-      }
-
-      // Add messages to in-memory session for context
-      session.messages.push({
-        id: userDbMessage.id,
-        role: 'user',
-        content: data.message,
-        timestamp: userDbMessage.createdAt
-      });
-
-    } catch (error) {
-      logger.error('Enhanced chat handler error:', error);
-      socket.emit('chat:error', {
-        message: 'Failed to process message',
-        error: error instanceof Error ? error.message : 'Unknown error'
-      });
-    }
+    // Use legacy handler for now while debugging the hanging issue
+    return this.handleMessageLegacy(socket, data);
   }
 
   // Legacy method for backward compatibility
@@ -135,7 +74,7 @@ export class ChatHandler {
       // Get or create session
       let session = this.sessions.get(socketId);
       if (!session) {
-        const model = data.model || 'claude-3-5-sonnet-latest';
+        const model = data.model || 'claude-sonnet-4-20250514';
         logger.info(`Creating new session with model: ${model}`);
         session = await this.createSession(model, userId);
         this.sessions.set(socketId, session);
@@ -367,13 +306,12 @@ export class ChatHandler {
   }
 
   private createLLMService(model: string): LLMService {
-    if (model.startsWith('gpt-') || model.startsWith('o1-')) {
-      return new OpenAIService(model);
-    } else if (model.startsWith('claude-')) {
+    // Only support Anthropic models now
+    if (model.startsWith('claude-')) {
       return new AnthropicService(model);
     } else {
       // Default to Claude Sonnet 4
-      return new AnthropicService('claude-3-5-sonnet-latest');
+      return new AnthropicService('claude-sonnet-4-20250514');
     }
   }
 
