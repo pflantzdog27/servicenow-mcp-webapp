@@ -8,7 +8,7 @@ export class AnthropicService extends LLMService {
   private client: Anthropic;
   private model: string;
 
-  constructor(model: string = 'claude-3-5-sonnet-20241022') {
+  constructor(model: string = 'claude-3-5-sonnet-latest') {
     super();
     this.model = model;
     
@@ -108,7 +108,7 @@ export class AnthropicService extends LLMService {
       } else if (error?.status === 400) {
         throw new Error(`Invalid request to Anthropic API: ${error?.message || 'Unknown error'}`);
       } else if (error?.message?.includes('model')) {
-        throw new Error(`Invalid model '${this.model}'. Please use a valid Claude model like 'claude-3-5-sonnet-20241022'.`);
+        throw new Error(`Invalid model '${this.model}'. Please use a valid Claude model like 'claude-3-5-sonnet-latest'.`);
       } else {
         throw new Error(`Anthropic request failed: ${error?.message || 'Unknown error'}`);
       }

@@ -68,7 +68,7 @@ export class ChatHandler {
       // Get or create session
       let session = this.sessions.get(socketId);
       if (!session) {
-        const model = data.model || 'claude-3-5-sonnet-20241022';
+        const model = data.model || 'claude-3-5-sonnet-latest';
         logger.info(`Creating new session with model: ${model}`);
         session = await this.createSession(model, userId);
         this.sessions.set(socketId, session);
@@ -135,7 +135,7 @@ export class ChatHandler {
       // Get or create session
       let session = this.sessions.get(socketId);
       if (!session) {
-        const model = data.model || 'claude-3-5-sonnet-20241022';
+        const model = data.model || 'claude-3-5-sonnet-latest';
         logger.info(`Creating new session with model: ${model}`);
         session = await this.createSession(model, userId);
         this.sessions.set(socketId, session);
@@ -372,8 +372,8 @@ export class ChatHandler {
     } else if (model.startsWith('claude-')) {
       return new AnthropicService(model);
     } else {
-      // Default to Claude 3.5 Sonnet
-      return new AnthropicService('claude-3-5-sonnet-20241022');
+      // Default to Claude Sonnet 4
+      return new AnthropicService('claude-3-5-sonnet-latest');
     }
   }
 
