@@ -4,14 +4,15 @@ import {
   CheckCircle, 
   XCircle, 
   Loader2, 
-  ExternalLink 
+  ExternalLink,
+  ChevronRight
 } from 'lucide-react';
 
 interface ToolCall {
   name: string;
   arguments: any;
   result?: any;
-  status: 'executing' | 'completed' | 'error';
+  status: 'pending' | 'executing' | 'completed' | 'error';
 }
 
 interface ToolInvocationProps {
@@ -19,12 +20,23 @@ interface ToolInvocationProps {
 }
 
 const ToolInvocation: React.FC<ToolInvocationProps> = ({ toolCall }) => {
+  const [isExpanded, setIsExpanded] = React.useState(false);
+  
+  const getToolDisplayName = (name: string) => {
+    // Remove namespace prefix and format for display
+    return name.replace('servicenow-mcp:', '')
+      .split('-')
+      .map(word => word.charAt(0).toUpperCase() + word.slice(1))
+      .join(' ');
+  };
+
   const getStatusIcon = () => {
     switch (toolCall.status) {
+      case 'pending':
       case 'executing':
-        return <Loader2 className="w-4 h-4 animate-spin text-primary" />;
+        return <Loader2 className="w-4 h-4 animate-spin text-blue-500" />;
       case 'completed':
-        return <CheckCircle className="w-4 h-4 text-success" />;
+        return <CheckCircle className="w-4 h-4 text-green-500" />;
       case 'error':
         return <XCircle className="w-4 h-4 text-red-500" />;
       default:
@@ -34,6 +46,8 @@ const ToolInvocation: React.FC<ToolInvocationProps> = ({ toolCall }) => {
 
   const getStatusText = () => {
     switch (toolCall.status) {
+      case 'pending':
+        return 'Pending';
       case 'executing':
         return 'Executing...';
       case 'completed':
@@ -47,12 +61,14 @@ const ToolInvocation: React.FC<ToolInvocationProps> = ({ toolCall }) => {
 
   const getStatusColor = () => {
     switch (toolCall.status) {
+      case 'pending':
+        return 'border-yellow-500 bg-yellow-500/10';
       case 'executing':
-        return 'border-primary bg-primary/5';
+        return 'border-blue-500 bg-blue-500/10';
       case 'completed':
-        return 'border-success bg-success/5';
+        return 'border-green-500 bg-green-500/10';
       case 'error':
-        return 'border-red-500 bg-red-500/5';
+        return 'border-red-500 bg-red-500/10';
       default:
         return 'border-gray-600 bg-gray-700/20';
     }
@@ -60,17 +76,10 @@ const ToolInvocation: React.FC<ToolInvocationProps> = ({ toolCall }) => {
 
   const formatArguments = (args: any) => {
     if (!args || typeof args !== 'object' || Object.keys(args).length === 0) {
-      return <span className="text-gray-500 italic">No parameters required</span>;
+      return 'No parameters required';
     }
     
-    return Object.entries(args).map(([key, value]) => (
-      <div key={key} className="flex">
-        <span className="text-gray-400 min-w-0 flex-shrink-0">{key}:</span>
-        <span className="text-white ml-2 break-all">
-          {typeof value === 'string' ? value : JSON.stringify(value)}
-        </span>
-      </div>
-    ));
+    return JSON.stringify(args, null, 2);
   };
 
   const extractSysId = (result: any) => {
@@ -91,54 +100,65 @@ const ToolInvocation: React.FC<ToolInvocationProps> = ({ toolCall }) => {
   const serviceNowLink = sysId ? generateServiceNowLink(sysId) : null;
 
   return (
-    <div className={`border rounded-lg p-4 transition-all ${getStatusColor()} mb-3`}>
-      <div className="flex items-center justify-between mb-3">
-        <div className="flex items-center space-x-3">
-          {getStatusIcon()}
-          <div>
-            <span className="font-medium text-white text-lg">{toolCall.name.replace(/-/g, ' ').replace(/\b\w/g, l => l.toUpperCase())}</span>
-            <div className="text-sm text-gray-400">{getStatusText()}</div>
-          </div>
-        </div>
-      </div>
+    <div className="my-2 border border-gray-700 rounded-lg bg-gray-800/50 overflow-hidden">
+      <button
+        onClick={() => setIsExpanded(!isExpanded)}
+        className="w-full px-4 py-2 flex items-center gap-2 hover:bg-gray-700/50 transition-colors"
+      >
+        {getStatusIcon()}
+        <span className="text-sm font-mono text-gray-300">
+          {getToolDisplayName(toolCall.name)}
+        </span>
+        <span className="text-xs text-gray-500 ml-2">
+          {getStatusText()}
+        </span>
+        <ChevronRight 
+          className={`w-4 h-4 text-gray-500 ml-auto transition-transform ${
+            isExpanded ? 'rotate-90' : ''
+          }`}
+        />
+      </button>
       
-      {/* Arguments */}
-      <div className="mb-3">
-        <div className="text-sm text-gray-400 mb-1">Parameters:</div>
-        <div className="bg-surface-light rounded p-2 text-xs font-mono space-y-1">
-          {formatArguments(toolCall.arguments)}
-        </div>
-      </div>
-      
-      {/* Result */}
-      {toolCall.result && (
-        <div>
-          <div className="text-sm text-gray-400 mb-1">Result:</div>
-          <div className="bg-surface-light rounded p-2 text-xs">
-            {toolCall.status === 'error' ? (
-              <div className="text-red-400">
-                {toolCall.result.content?.[0]?.text || 'Unknown error occurred'}
-              </div>
-            ) : (
-              <div className="text-success">
-                {toolCall.result.content?.[0]?.text || 'Operation completed successfully'}
-              </div>
-            )}
-          </div>
+      {isExpanded && (
+        <div className="px-4 py-3 border-t border-gray-700">
+          {toolCall.arguments && (
+            <div className="mb-3">
+              <div className="text-xs text-gray-500 mb-1">Parameters:</div>
+              <pre className="text-xs bg-gray-900 p-2 rounded overflow-x-auto text-gray-300">
+                {formatArguments(toolCall.arguments)}
+              </pre>
+            </div>
+          )}
           
-          {/* ServiceNow Link */}
-          {serviceNowLink && toolCall.status === 'completed' && (
-            <div className="mt-2 flex items-center space-x-2">
-              <a
-                href={serviceNowLink}
-                target="_blank"
-                rel="noopener noreferrer"
-                className="inline-flex items-center space-x-1 text-primary hover:text-blue-400 text-sm"
-              >
-                <ExternalLink className="w-3 h-3" />
-                <span>View in ServiceNow</span>
-              </a>
-              <span className="text-xs text-gray-500">({sysId})</span>
+          {(toolCall.result || toolCall.status === 'error') && (
+            <div>
+              <div className="text-xs text-gray-500 mb-1">
+                {toolCall.status === 'error' ? 'Error:' : 'Result:'}
+              </div>
+              <pre className={`text-xs p-2 rounded overflow-x-auto ${
+                toolCall.status === 'error' ? 'bg-red-900/20 text-red-300' : 'bg-gray-900 text-gray-300'
+              }`}>
+                {toolCall.status === 'error' 
+                  ? (toolCall.result?.content?.[0]?.text || 'Unknown error occurred')
+                  : (toolCall.result?.content?.[0]?.text || 'Operation completed successfully')
+                }
+              </pre>
+              
+              {/* ServiceNow Link */}
+              {serviceNowLink && toolCall.status === 'completed' && (
+                <div className="mt-2 flex items-center space-x-2">
+                  <a
+                    href={serviceNowLink}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="inline-flex items-center space-x-1 text-blue-400 hover:text-blue-300 text-sm"
+                  >
+                    <ExternalLink className="w-3 h-3" />
+                    <span>View in ServiceNow</span>
+                  </a>
+                  <span className="text-xs text-gray-500">({sysId})</span>
+                </div>
+              )}
             </div>
           )}
         </div>

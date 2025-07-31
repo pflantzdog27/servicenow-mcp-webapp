@@ -7,6 +7,7 @@ import { AnthropicService } from '../llm/anthropic-service';
 import { ActivityService } from '../services/activity';
 import { ChatService } from '../services/chat';
 import { AuthenticatedSocket } from '../middleware/socketAuth';
+import { ContextAwareMessageHandler } from '../handlers/context-aware-handler';
 import { createLogger } from '../utils/logger';
 import { v4 as uuidv4 } from 'uuid';
 
@@ -34,11 +35,16 @@ export class ChatHandler {
   private mcpClientManager: MCPClientManager;
   private activityService: ActivityService;
   private chatService: ChatService;
+  private contextAwareHandler: ContextAwareMessageHandler;
 
   constructor(mcpClientManager: MCPClientManager) {
     this.mcpClientManager = mcpClientManager;
     this.activityService = new ActivityService();
     this.chatService = new ChatService();
+    this.contextAwareHandler = new ContextAwareMessageHandler(
+      mcpClientManager,
+      process.env.SERVICENOW_INSTANCE_URL || ''
+    );
   }
 
   async setModel(socketId: string, model: string, userId: string): Promise<void> {
@@ -56,13 +62,80 @@ export class ChatHandler {
   async handleMessage(socket: AuthenticatedSocket, data: { message: string; model?: string }): Promise<void> {
     const socketId = socket.id;
     const userId = socket.user!.userId;
-    logger.info(`Handling message from ${socketId}:`, { message: data.message, model: data.model });
+    logger.info(`Enhanced chat handler processing message from ${socketId}:`, { message: data.message, model: data.model });
     
     try {
       // Get or create session
       let session = this.sessions.get(socketId);
       if (!session) {
-        const model = data.model || 'claude-sonnet-4-20250514';
+        const model = data.model || 'claude-3-5-sonnet-20241022';
+        logger.info(`Creating new session with model: ${model}`);
+        session = await this.createSession(model, userId);
+        this.sessions.set(socketId, session);
+      }
+
+      // Create user message in database
+      const userDbMessage = await prisma.message.create({
+        data: {
+          role: 'USER',
+          content: data.message,
+          sessionId: session.dbSessionId!,
+          model: session.model
+        }
+      });
+
+      // Create assistant message in database
+      const assistantDbMessage = await prisma.message.create({
+        data: {
+          role: 'ASSISTANT',
+          content: '',
+          sessionId: session.dbSessionId!,
+          model: session.model
+        }
+      });
+
+      // Use the context-aware handler for enhanced processing
+      await this.contextAwareHandler.processMessage(
+        socket,
+        assistantDbMessage.id,
+        data.message,
+        session.llmService,
+        session.model
+      );
+
+      // Auto-generate session title from first message if needed
+      if (session.messages.length === 0) {
+        await this.chatService.updateSessionTitle(session.dbSessionId!, userId, '');
+      }
+
+      // Add messages to in-memory session for context
+      session.messages.push({
+        id: userDbMessage.id,
+        role: 'user',
+        content: data.message,
+        timestamp: userDbMessage.createdAt
+      });
+
+    } catch (error) {
+      logger.error('Enhanced chat handler error:', error);
+      socket.emit('chat:error', {
+        message: 'Failed to process message',
+        error: error instanceof Error ? error.message : 'Unknown error'
+      });
+    }
+  }
+
+  // Legacy method for backward compatibility
+  async handleMessageLegacy(socket: AuthenticatedSocket, data: { message: string; model?: string }): Promise<void> {
+    const socketId = socket.id;
+    const userId = socket.user!.userId;
+    logger.info(`Legacy handler processing message from ${socketId}:`, { message: data.message, model: data.model });
+    
+    try {
+      // Get or create session
+      let session = this.sessions.get(socketId);
+      if (!session) {
+        const model = data.model || 'claude-3-5-sonnet-20241022';
         logger.info(`Creating new session with model: ${model}`);
         session = await this.createSession(model, userId);
         this.sessions.set(socketId, session);
@@ -285,21 +358,22 @@ export class ChatHandler {
   }
 
   private getContextLimit(model: string): number {
+    if (model.startsWith('gpt-4o')) return 128000;
     if (model.startsWith('gpt-4')) return 8000;
     if (model.startsWith('gpt-3.5')) return 4000;
-    if (model.startsWith('o4-')) return 128000;
+    if (model.startsWith('o1-')) return 128000;
     if (model.startsWith('claude-')) return 200000;
     return 4000; // default
   }
 
   private createLLMService(model: string): LLMService {
-    if (model.startsWith('gpt-') || model.startsWith('o4-')) {
+    if (model.startsWith('gpt-') || model.startsWith('o1-')) {
       return new OpenAIService(model);
     } else if (model.startsWith('claude-')) {
       return new AnthropicService(model);
     } else {
-      // Default to Claude 4 Sonnet
-      return new AnthropicService('claude-sonnet-4-20250514');
+      // Default to Claude 3.5 Sonnet
+      return new AnthropicService('claude-3-5-sonnet-20241022');
     }
   }
 
@@ -325,6 +399,12 @@ export class ChatHandler {
   }
 
   cleanup(socketId: string): void {
+    const session = this.sessions.get(socketId);
+    if (session && session.dbSessionId) {
+      // Extract user ID from session if available
+      // This is a simplified approach - in a real implementation, you'd want to track userId properly
+      this.contextAwareHandler.cleanup(socketId);
+    }
     this.sessions.delete(socketId);
   }
 }

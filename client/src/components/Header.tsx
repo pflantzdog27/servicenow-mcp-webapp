@@ -13,10 +13,11 @@ interface HeaderProps {
 }
 
 const models = [
-  { id: 'claude-sonnet-4-20250514', name: 'Claude 4 Sonnet', provider: 'Anthropic' },
+  { id: 'claude-3-5-sonnet-20241022', name: 'Claude 3.5 Sonnet', provider: 'Anthropic' },
   { id: 'claude-3-opus-20240229', name: 'Claude 3 Opus', provider: 'Anthropic' },
   { id: 'claude-3-sonnet-20240229', name: 'Claude 3 Sonnet', provider: 'Anthropic' },
-  { id: 'o4-mini-2025-04-16', name: 'GPT-o4 Mini', provider: 'OpenAI' },
+  { id: 'o1-mini', name: 'o1-mini', provider: 'OpenAI' },
+  { id: 'gpt-4o', name: 'GPT-4o', provider: 'OpenAI' },
   { id: 'gpt-4', name: 'GPT-4', provider: 'OpenAI' },
   { id: 'gpt-3.5-turbo', name: 'GPT-3.5 Turbo', provider: 'OpenAI' },
 ];

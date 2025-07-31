@@ -1,7 +1,7 @@
 import React, { useEffect } from 'react';
 import { useParams, useOutletContext } from 'react-router-dom';
 import Sidebar from '../components/Sidebar';
-import ChatInterface from '../components/ChatInterface';
+import EnhancedChatInterface from '../components/EnhancedChatInterface';
 import ActivityPanel from '../components/ActivityPanel';
 import { Socket } from 'socket.io-client';
 
@@ -26,9 +26,9 @@ function ChatDetailView() {
         <Sidebar socket={socket} />
       </div>
       
-      {/* Center - Chat Interface */}
+      {/* Center - Enhanced Chat Interface */}
       <div className="flex-1 flex flex-col min-w-0">
-        <ChatInterface 
+        <EnhancedChatInterface 
           socket={socket}
           selectedModel={selectedModel}
           chatId={chatId}

@@ -8,7 +8,7 @@ export class AnthropicService extends LLMService {
   private client: Anthropic;
   private model: string;
 
-  constructor(model: string = 'claude-sonnet-4-20250514') {
+  constructor(model: string = 'claude-3-5-sonnet-20241022') {
     super();
     this.model = model;
     
@@ -29,14 +29,26 @@ export class AnthropicService extends LLMService {
     onStream?: (chunk: LLMStreamChunk) => void
   ): Promise<LLMResponse> {
     try {
-      const systemMessage = this.formatSystemMessage();
+      // Extract system message from conversation or use default
+      const systemMessages = messages.filter(msg => msg.role === 'system');
+      const systemMessage = systemMessages.length > 0 
+        ? systemMessages[systemMessages.length - 1].content  // Use the last system message
+        : this.formatSystemMessage();
       
       // Filter out system messages from the messages array (Anthropic handles system separately)
       const userMessages = messages.filter(msg => msg.role !== 'system');
       
-      const stream = await (this.client as any).messages.create({
+      // Log the request for debugging
+      logger.info('Creating Anthropic message stream:', {
         model: this.model,
-        max_tokens: 200000, // ~$5 safety limit for Claude ($3/MTok input + $15/MTok output)
+        messageCount: userMessages.length,
+        systemMessageLength: systemMessage.length,
+        hasTools: this.availableTools.length > 0
+      });
+
+      const stream = await this.client.messages.create({
+        model: this.model,
+        max_tokens: 4096, // More reasonable limit
         temperature: 0.7,
         system: systemMessage,
         messages: userMessages.map(msg => ({
@@ -76,14 +88,30 @@ export class AnthropicService extends LLMService {
         usage
       };
 
-    } catch (error) {
+    } catch (error: any) {
       logger.error('Anthropic API error details:', {
         error: error,
+        errorMessage: error?.message,
+        errorType: error?.type,
+        errorStatus: error?.status,
         model: this.model,
         messageCount: messages.length,
-        hasApiKey: !!process.env.ANTHROPIC_API_KEY
+        hasApiKey: !!process.env.ANTHROPIC_API_KEY,
+        apiKeyPrefix: process.env.ANTHROPIC_API_KEY?.substring(0, 7) + '...'
       });
-      throw new Error(`Anthropic request failed: ${error instanceof Error ? error.message : error}`);
+
+      // Provide more specific error messages
+      if (error?.status === 401) {
+        throw new Error('Invalid Anthropic API key. Please check your ANTHROPIC_API_KEY environment variable.');
+      } else if (error?.status === 429) {
+        throw new Error('Anthropic API rate limit exceeded. Please try again later.');
+      } else if (error?.status === 400) {
+        throw new Error(`Invalid request to Anthropic API: ${error?.message || 'Unknown error'}`);
+      } else if (error?.message?.includes('model')) {
+        throw new Error(`Invalid model '${this.model}'. Please use a valid Claude model like 'claude-3-5-sonnet-20241022'.`);
+      } else {
+        throw new Error(`Anthropic request failed: ${error?.message || 'Unknown error'}`);
+      }
     }
   }
 

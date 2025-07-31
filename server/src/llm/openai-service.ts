@@ -21,11 +21,17 @@ export class OpenAIService extends LLMService {
     onStream?: (chunk: LLMStreamChunk) => void
   ): Promise<LLMResponse> {
     try {
-      const systemMessage = this.formatSystemMessage();
+      // Extract system message from conversation or use default
+      const systemMessages = messages.filter(msg => msg.role === 'system');
+      const systemMessage = systemMessages.length > 0 
+        ? systemMessages[systemMessages.length - 1].content  // Use the last system message
+        : this.formatSystemMessage();
+      
+      // Build formatted messages with system message first
       const formattedMessages = [
         { role: 'system' as const, content: systemMessage },
-        ...messages.map(msg => ({
-          role: msg.role as 'user' | 'assistant' | 'system',
+        ...messages.filter(msg => msg.role !== 'system').map(msg => ({
+          role: msg.role as 'user' | 'assistant',
           content: msg.content
         }))
       ];
@@ -33,12 +39,14 @@ export class OpenAIService extends LLMService {
       // Set appropriate max_tokens based on model capabilities
       let maxTokens = 2000; // Default safe value
       
-      if (this.model.includes('gpt-4')) {
+      if (this.model.includes('gpt-4o')) {
+        maxTokens = 32000; // GPT-4o has 128K context window
+      } else if (this.model.includes('gpt-4')) {
         maxTokens = 2000; // GPT-4 has 8K context, system message uses ~4.7K, so max 2K for completion
       } else if (this.model.includes('gpt-3.5')) {
         maxTokens = 1000; // GPT-3.5 has 4K context, leave room for system message
-      } else if (this.model.includes('o4-mini')) {
-        maxTokens = 32000; // o4-mini has higher limits
+      } else if (this.model.includes('o1-')) {
+        maxTokens = 32000; // o1 models have higher limits
       }
 
       const stream = await this.client.chat.completions.create({

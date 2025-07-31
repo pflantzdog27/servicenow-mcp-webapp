@@ -10,7 +10,7 @@
     "test": "jest"
   },
   "dependencies": {
-    "@anthropic-ai/sdk": "^0.9.1",
+    "@anthropic-ai/sdk": "^0.57.0",
     "@modelcontextprotocol/sdk": "^1.0.0",
     "@prisma/client": "^6.13.0",
     "@types/multer": "^2.0.0",
