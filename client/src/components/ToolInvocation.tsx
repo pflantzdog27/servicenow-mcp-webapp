@@ -59,7 +59,9 @@ const ToolInvocation: React.FC<ToolInvocationProps> = ({ toolCall }) => {
   };
 
   const formatArguments = (args: any) => {
-    if (!args || typeof args !== 'object') return args;
+    if (!args || typeof args !== 'object' || Object.keys(args).length === 0) {
+      return <span className="text-gray-500 italic">No parameters required</span>;
+    }
     
     return Object.entries(args).map(([key, value]) => (
       <div key={key} className="flex">

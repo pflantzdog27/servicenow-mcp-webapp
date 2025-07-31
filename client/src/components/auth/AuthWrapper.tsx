@@ -1,16 +1,10 @@
-import React, { useState } from 'react';
+import React from 'react';
 import { Loader2 } from 'lucide-react';
+import { Navigate, Outlet } from 'react-router-dom';
 import { useAuth } from '../../contexts/AuthContext';
-import LoginForm from './LoginForm';
-import RegisterForm from './RegisterForm';
 
-interface AuthWrapperProps {
-  children: React.ReactNode;
-}
-
-const AuthWrapper: React.FC<AuthWrapperProps> = ({ children }) => {
+const AuthWrapper: React.FC = () => {
   const { isAuthenticated, isLoading } = useAuth();
-  const [showRegister, setShowRegister] = useState(false);
 
   // Show loading spinner while checking authentication
   if (isLoading) {
@@ -24,17 +18,13 @@ const AuthWrapper: React.FC<AuthWrapperProps> = ({ children }) => {
     );
   }
 
-  // Show auth forms if not authenticated
+  // Redirect to login if not authenticated
   if (!isAuthenticated) {
-    return showRegister ? (
-      <RegisterForm onSwitchToLogin={() => setShowRegister(false)} />
-    ) : (
-      <LoginForm onSwitchToRegister={() => setShowRegister(true)} />
-    );
+    return <Navigate to="/login" replace />;
   }
 
-  // Show app if authenticated
-  return <>{children}</>;
+  // Show protected routes if authenticated
+  return <Outlet />;
 };
 
 export default AuthWrapper;

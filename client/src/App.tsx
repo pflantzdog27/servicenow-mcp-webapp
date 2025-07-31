@@ -1,55 +1,44 @@
-import React, { useState } from 'react';
-import Header from './components/Header';
-import Sidebar from './components/Sidebar';
-import ChatInterface from './components/ChatInterface';
-import ActivityPanel from './components/ActivityPanel';
+import React from 'react';
+import { BrowserRouter as Router, Routes, Route, Navigate } from 'react-router-dom';
 import AuthWrapper from './components/auth/AuthWrapper';
+import LoginForm from './components/auth/LoginForm';
+import RegisterForm from './components/auth/RegisterForm';
 import { AuthProvider } from './contexts/AuthContext';
-import { useWebSocket } from './hooks/useWebSocket';
-
-function AppContent() {
-  const [selectedModel, setSelectedModel] = useState('gpt-4');
-  const socket = useWebSocket();
-
-  return (
-    <div className="h-screen bg-background flex flex-col">
-      {/* Header */}
-      <Header 
-        selectedModel={selectedModel}
-        onModelChange={setSelectedModel}
-        socket={socket}
-      />
-      
-      {/* Main content */}
-      <div className="flex-1 flex overflow-hidden">
-        {/* Left sidebar - Quick Actions */}
-        <div className="w-80 bg-surface border-r border-gray-700 flex-shrink-0">
-          <Sidebar socket={socket} />
-        </div>
-        
-        {/* Center - Chat Interface */}
-        <div className="flex-1 flex flex-col min-w-0">
-          <ChatInterface 
-            socket={socket}
-            selectedModel={selectedModel}
-          />
-        </div>
-        
-        {/* Right panel - Activity History */}
-        <div className="w-80 bg-surface border-l border-gray-700 flex-shrink-0">
-          <ActivityPanel socket={socket} />
-        </div>
-      </div>
-    </div>
-  );
-}
+import { ProjectProvider } from './contexts/ProjectContext';
+import MainLayout from './layouts/MainLayout';
+import ChatView from './views/ChatView';
+import ProjectsView from './views/ProjectsView';
+import ProjectDetailView from './views/ProjectDetailView';
+import ChatHistoryView from './views/ChatHistoryView';
+import ChatDetailView from './views/ChatDetailView';
 
 function App() {
   return (
     <AuthProvider>
-      <AuthWrapper>
-        <AppContent />
-      </AuthWrapper>
+      <ProjectProvider>
+        <Router>
+          <Routes>
+            {/* Auth routes */}
+            <Route path="/login" element={<LoginForm />} />
+            <Route path="/register" element={<RegisterForm />} />
+            
+            {/* Protected routes */}
+            <Route path="/" element={<AuthWrapper />}>
+              <Route path="/" element={<MainLayout />}>
+                <Route index element={<ChatView />} />
+                <Route path="chat" element={<ChatView />} />
+                <Route path="chat/:chatId" element={<ChatDetailView />} />
+                <Route path="history" element={<ChatHistoryView />} />
+                <Route path="projects" element={<ProjectsView />} />
+                <Route path="project/:projectId" element={<ProjectDetailView />} />
+                <Route path="project/:projectId/document/:documentId" element={<ProjectDetailView />} />
+              </Route>
+            </Route>
+            
+            <Route path="*" element={<Navigate to="/" replace />} />
+          </Routes>
+        </Router>
+      </ProjectProvider>
     </AuthProvider>
   );
 }

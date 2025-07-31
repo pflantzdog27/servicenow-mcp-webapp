@@ -226,5 +226,49 @@ class AuthService {
   }
 }
 
+// Authenticated fetch wrapper
+export const authFetch = async (url: string, options: RequestInit = {}): Promise<Response> => {
+  const token = authService.getToken();
+  
+  if (!token) {
+    throw new Error('No authentication token');
+  }
+
+  const baseUrl = import.meta.env.VITE_API_URL || 'http://localhost:3001';
+  const fullUrl = url.startsWith('http') ? url : `${baseUrl}${url}`;
+
+  const headers: Record<string, string> = {
+    'Authorization': `Bearer ${token}`,
+  };
+
+  // Add any existing headers
+  if (options.headers) {
+    Object.entries(options.headers).forEach(([key, value]) => {
+      if (typeof value === 'string') {
+        headers[key] = value;
+      }
+    });
+  }
+
+  // Only add Content-Type for non-FormData requests
+  if (!(options.body instanceof FormData)) {
+    headers['Content-Type'] = headers['Content-Type'] || 'application/json';
+  }
+
+  const response = await fetch(fullUrl, {
+    ...options,
+    headers,
+  });
+
+  // Handle authentication errors
+  if (response.status === 401) {
+    authService.removeToken();
+    window.location.href = '/login';
+    throw new Error('Authentication expired');
+  }
+
+  return response;
+};
+
 export const authService = new AuthService();
 export default authService;

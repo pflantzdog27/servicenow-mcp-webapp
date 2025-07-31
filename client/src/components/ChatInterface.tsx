@@ -3,6 +3,8 @@ import { Socket } from 'socket.io-client';
 import { Send, Loader2 } from 'lucide-react';
 import Message from './Message';
 import ToolInvocation from './ToolInvocation';
+import chatService, { ChatSession as ChatSessionType } from '../services/chat';
+import { useAuth } from '../contexts/AuthContext';
 
 interface ChatMessage {
   id: string;
@@ -17,13 +19,17 @@ interface ChatMessage {
 interface ChatInterfaceProps {
   socket: Socket | null;
   selectedModel: string;
+  chatId?: string;
 }
 
-const ChatInterface: React.FC<ChatInterfaceProps> = ({ socket, selectedModel }) => {
+const ChatInterface: React.FC<ChatInterfaceProps> = ({ socket, selectedModel, chatId }) => {
+  const { isAuthenticated } = useAuth();
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [inputValue, setInputValue] = useState('');
   const [isLoading, setIsLoading] = useState(false);
   const [streamingMessageId, setStreamingMessageId] = useState<string | null>(null);
+  const [currentSession, setCurrentSession] = useState<ChatSessionType | null>(null);
+  const [isLoadingSession, setIsLoadingSession] = useState(false);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
 
@@ -34,6 +40,77 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({ socket, selectedModel }) 
   useEffect(() => {
     scrollToBottom();
   }, [messages]);
+
+  // Load chat session on mount
+  useEffect(() => {
+    if (!isAuthenticated) {
+      console.log('🚫 Not authenticated, skipping session load');
+      return;
+    }
+
+    const loadSession = async () => {
+      try {
+        setIsLoadingSession(true);
+        console.log('🔄 Loading chat session...', { chatId, isAuthenticated });
+        console.log('🔑 Auth token exists:', !!localStorage.getItem('auth_token'));
+        
+        let session: ChatSessionType | null = null;
+        
+        if (chatId) {
+          // Load specific chat session
+          console.log('📄 Loading specific session:', chatId);
+          session = await chatService.getSession(chatId);
+          console.log('📄 Specific session result:', session);
+        } else {
+          // Load most recent session
+          console.log('📄 Loading most recent session...');
+          session = await chatService.getCurrentSession();
+          console.log('📄 Current session result:', session);
+        }
+
+        console.log('✅ Session loaded:', session);
+
+        if (session) {
+          setCurrentSession(session);
+          console.log('💾 Session set to state');
+          
+          // Load messages if they exist
+          if (session.messages && session.messages.length > 0) {
+            console.log('📝 Loading messages:', session.messages.length);
+            console.log('📝 Raw messages:', session.messages);
+            const formattedMessages = session.messages.map(msg => ({
+              id: msg.id,
+              role: msg.role.toLowerCase() as 'user' | 'assistant',
+              content: msg.content,
+              timestamp: msg.timestamp,
+              model: msg.model || undefined,
+              // TODO: Load tool calls from tool executions
+              toolCalls: []
+            }));
+            console.log('📝 Formatted messages:', formattedMessages);
+            setMessages(formattedMessages);
+            console.log('✅ Messages set to state:', formattedMessages.length);
+          } else {
+            console.log('ℹ️ No messages found in session');
+            setMessages([]);
+          }
+        } else {
+          console.log('ℹ️ No session found, clearing messages');
+          setMessages([]);
+        }
+      } catch (error) {
+        console.error('❌ Error loading chat session:', error);
+        if (error instanceof Error) {
+          console.error('❌ Error details:', error.message);
+        }
+      } finally {
+        setIsLoadingSession(false);
+        console.log('🏁 Session loading complete');
+      }
+    };
+
+    loadSession();
+  }, [isAuthenticated, chatId]);
 
   useEffect(() => {
     if (!socket) return;
@@ -83,7 +160,7 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({ socket, selectedModel }) 
           const newToolCall = {
             name: toolName,
             arguments: args,
-            status: 'executing'
+            status: 'executing' as const
           };
           return {
             ...msg,
@@ -189,13 +266,20 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({ socket, selectedModel }) 
     <div className="h-full flex flex-col">
       {/* Messages */}
       <div className="flex-1 overflow-y-auto p-6 space-y-6 scrollbar-thin">
-        {messages.length === 0 ? (
+        {isLoadingSession ? (
+          <div className="flex items-center justify-center h-full">
+            <div className="text-center">
+              <Loader2 className="w-8 h-8 animate-spin text-primary mx-auto mb-4" />
+              <p className="text-gray-400">Loading conversation...</p>
+            </div>
+          </div>
+        ) : messages.length === 0 ? (
           <div className="flex items-center justify-center h-full">
             <div className="text-center">
               <div className="w-16 h-16 bg-primary rounded-full flex items-center justify-center mx-auto mb-4">
                 <Send className="w-8 h-8 text-black" />
               </div>
-              <h3 className="text-xl font-semibold text-white mb-2">Welcome to ServiceNow AI Assistant</h3>
+              <h3 className="text-xl font-semibold text-white mb-2">Welcome to NOWdev.ai</h3>
               <p className="text-gray-400 max-w-md">
                 Ask me anything about your ServiceNow instance. I can help you create incidents, 
                 manage catalog items, update records, and much more using natural language.

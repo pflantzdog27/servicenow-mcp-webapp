@@ -6,25 +6,34 @@ import {
   CheckCircle, 
   XCircle, 
   ExternalLink,
-  Download
+  Download,
+  RefreshCw
 } from 'lucide-react';
-
-interface ActivityLog {
-  timestamp: Date;
-  operations: Array<{
-    tool: string;
-    arguments: any;
-    success: boolean;
-  }>;
-}
+import activityService, { ActivityLog } from '../services/activity';
+import { useAuth } from '../contexts/AuthContext';
 
 interface ActivityPanelProps {
   socket: Socket | null;
 }
 
 const ActivityPanel: React.FC<ActivityPanelProps> = ({ socket }) => {
+  const { isAuthenticated, isLoading: authLoading } = useAuth();
   const [activities, setActivities] = useState<ActivityLog[]>([]);
+  const [isLoading, setIsLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
 
+  // Load historical activity data when user is authenticated
+  useEffect(() => {
+    if (isAuthenticated && !authLoading) {
+      loadActivityData();
+    } else if (!isAuthenticated && !authLoading) {
+      // Clear activities if user is not authenticated
+      setActivities([]);
+      setError(null);
+    }
+  }, [isAuthenticated, authLoading]);
+
+  // Listen for real-time activity updates
   useEffect(() => {
     if (!socket) return;
 
@@ -41,6 +50,28 @@ const ActivityPanel: React.FC<ActivityPanelProps> = ({ socket }) => {
       socket.off('activity:log', handleActivityLog);
     };
   }, [socket]);
+
+  const loadActivityData = async () => {
+    if (!isAuthenticated) {
+      return;
+    }
+    
+    try {
+      setIsLoading(true);
+      setError(null);
+      const data = await activityService.getActivity(100, 0);
+      setActivities(data);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Failed to load activity data');
+      console.error('Error loading activity data:', err);
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
+  const handleRefresh = () => {
+    loadActivityData();
+  };
 
   const formatTime = (date: Date) => {
     return date.toLocaleTimeString('en-US', { 
@@ -103,23 +134,62 @@ const ActivityPanel: React.FC<ActivityPanelProps> = ({ socket }) => {
             <Activity className="w-5 h-5 text-primary" />
             <h2 className="text-lg font-semibold text-white">Recent Activity</h2>
           </div>
-          <button
-            onClick={exportActivities}
-            disabled={activities.length === 0}
-            className="p-2 text-gray-400 hover:text-white disabled:opacity-50 disabled:cursor-not-allowed"
-            title="Export activity log"
-          >
-            <Download className="w-4 h-4" />
-          </button>
+          <div className="flex items-center space-x-2">
+            <button
+              onClick={handleRefresh}
+              disabled={isLoading}
+              className="p-2 text-gray-400 hover:text-white disabled:opacity-50 disabled:cursor-not-allowed"
+              title="Refresh activity"
+            >
+              <RefreshCw className={`w-4 h-4 ${isLoading ? 'animate-spin' : ''}`} />
+            </button>
+            <button
+              onClick={exportActivities}
+              disabled={activities.length === 0}
+              className="p-2 text-gray-400 hover:text-white disabled:opacity-50 disabled:cursor-not-allowed"
+              title="Export activity log"
+            >
+              <Download className="w-4 h-4" />
+            </button>
+          </div>
         </div>
         <p className="text-sm text-gray-400 mt-1">
           Track all ServiceNow operations
         </p>
+        {error && (
+          <p className="text-sm text-red-400 mt-1">
+            Error: {error}
+          </p>
+        )}
       </div>
 
       {/* Activity List */}
       <div className="flex-1 overflow-y-auto scrollbar-thin">
-        {activities.length === 0 ? (
+        {authLoading ? (
+          <div className="flex items-center justify-center h-full">
+            <div className="text-center">
+              <RefreshCw className="w-12 h-12 text-primary mx-auto mb-3 animate-spin" />
+              <p className="text-gray-400">Initializing...</p>
+            </div>
+          </div>
+        ) : !isAuthenticated ? (
+          <div className="flex items-center justify-center h-full">
+            <div className="text-center">
+              <Activity className="w-12 h-12 text-gray-600 mx-auto mb-3" />
+              <p className="text-gray-400">Please log in</p>
+              <p className="text-sm text-gray-500 mt-1">
+                Activity history requires authentication
+              </p>
+            </div>
+          </div>
+        ) : isLoading && activities.length === 0 ? (
+          <div className="flex items-center justify-center h-full">
+            <div className="text-center">
+              <RefreshCw className="w-12 h-12 text-primary mx-auto mb-3 animate-spin" />
+              <p className="text-gray-400">Loading activity...</p>
+            </div>
+          </div>
+        ) : activities.length === 0 ? (
           <div className="flex items-center justify-center h-full">
             <div className="text-center">
               <Activity className="w-12 h-12 text-gray-600 mx-auto mb-3" />
