@@ -150,6 +150,13 @@ servicenow-mcp-webapp/
   - Queue-based tool execution
   - Enhanced authentication with JWT
   - Database persistence with Prisma ORM
+- ✅ **UI/UX Polish (Latest)**
+  - Auto-generated chat titles from conversation content
+  - Detailed timestamp formatting (relative times, actual hours)
+  - Human-readable model names in interface
+  - Clean header dropdown without provider suffixes
+  - SVG logo for crisp display
+  - Streamlined chat history list without redundant information
 
 ### Version 1.0 (MVP)
 - ✅ Core chat functionality with streaming
