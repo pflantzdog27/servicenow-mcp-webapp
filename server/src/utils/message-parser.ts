@@ -63,10 +63,7 @@ export function parseAssistantMessage(message: string): ParsedMessage {
   // Parse JSON-style function calls (for OpenAI)
   const jsonRegex = /```json\n\{[\s\S]*?"function_call"[\s\S]*?\}\n```/g;
   
-  while ((match = jsonRe
-
-
-.exec(message)) !== null) {
+  while ((match = jsonRegex.exec(message)) !== null) {
     try {
       const functionCall = JSON.parse(match[1]);
       if (functionCall.function_call) {

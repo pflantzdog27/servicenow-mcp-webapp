@@ -57,7 +57,13 @@ This application provides a ChatGPT/Claude-like interface for managing ServiceNo
    npm install
    cp .env.example .env
    # Configure your API keys and ServiceNow credentials
-   npm run dev
+   
+   # For enhanced version with real MCP integration:
+   ./run-enhanced.sh
+   
+   # Or manually:
+   npm run dev  # Enhanced version (default)
+   npm run dev:basic  # Basic version without MCP pooling
    ```
 
 3. **Frontend Setup**
@@ -73,13 +79,21 @@ This application provides a ChatGPT/Claude-like interface for managing ServiceNo
    - `SERVICENOW_INSTANCE_URL`: Your ServiceNow instance URL
    - `SERVICENOW_USERNAME`: ServiceNow username
    - `SERVICENOW_PASSWORD`: ServiceNow password
-   - `SERVICENOW_MCP_PATH`: Path to ServiceNow MCP server
+   - `SERVICENOW_MCP_PATH`: Path to ServiceNow MCP server executable
+   - `DATABASE_URL`: PostgreSQL connection string
+   - `REDIS_URL`: Redis connection string (optional)
+   - `JWT_SECRET`: Secret for JWT token generation
+   - `SESSION_SECRET`: Secret for session management
 
 ## Development
 
 ### Running Tests
 ```bash
 npm test
+
+# Test MCP connection
+cd server
+ts-node src/test-mcp-connection.ts
 ```
 
 ### Building for Production
@@ -94,17 +108,48 @@ servicenow-mcp-webapp/
 │   ├── src/
 │   │   ├── components/   # UI components
 │   │   ├── hooks/        # Custom React hooks
+│   │   ├── styles/       # Component styles
 │   │   └── types/        # TypeScript definitions
 ├── server/               # Node.js backend
 │   ├── src/
 │   │   ├── llm/          # LLM service implementations
 │   │   ├── mcp/          # MCP client integration
+│   │   ├── middleware/   # Express middleware
+│   │   ├── queues/       # Bull queue workers
+│   │   ├── routes/       # REST API routes
+│   │   ├── services/     # Business logic services
+│   │   ├── types/        # TypeScript types
 │   │   ├── websocket/    # Socket.io handlers
 │   │   └── utils/        # Utility functions
+│   └── prisma/           # Database schema and migrations
+├── shared/               # Shared types between client/server
 └── CLAUDE.md            # This file
 ```
 
 ## Recent Improvements
+
+### Version 2.0 (Enhanced Architecture)
+- ✅ **Enhanced MCP Integration**
+  - Connection pooling for improved performance
+  - Real ServiceNow tool execution with actual results
+  - Comprehensive logging and debugging capabilities
+  - Automatic reconnection and health checks
+- ✅ **Advanced Chat Features**
+  - Word-by-word streaming with thinking indicators
+  - Enhanced tool visualization with progress tracking
+  - Improved error handling and retry mechanisms
+  - Better context management for long conversations
+- ✅ **Developer Tools**
+  - Built-in test suite for MCP connectivity
+  - Debug status panel for real-time monitoring
+  - Developer tools panel with system metrics
+  - Test prompts panel for quick testing
+- ✅ **Production-Ready Features**
+  - Rate limiting and request throttling
+  - Redis-based session management
+  - Queue-based tool execution
+  - Enhanced authentication with JWT
+  - Database persistence with Prisma ORM
 
 ### Version 1.0 (MVP)
 - ✅ Core chat functionality with streaming
@@ -117,10 +162,12 @@ servicenow-mcp-webapp/
 ## Upcoming Features
 
 ### Authentication & Persistence
-- User login system
-- Chat history saving
-- Session management
-- Multiple chat conversations
+- ✅ User login system (implemented)
+- ✅ Chat history saving (implemented)
+- ✅ Session management (implemented)
+- ✅ Multiple chat conversations (implemented)
+- Advanced user roles and permissions
+- SSO integration with ServiceNow
 
 ### Context Management
 - Token/context limit tracking
@@ -142,6 +189,26 @@ Currently configured limits:
 - **O4-Mini**: 128K context (32K completion)
 - **Claude Sonnet**: 200K tokens
 
+## Debugging & Troubleshooting
+
+### MCP Connection Issues
+If tools show "completed" but with generic responses:
+
+1. **Check MCP Path**: Ensure `SERVICENOW_MCP_PATH` points to the executable
+2. **Verify Credentials**: Check ServiceNow credentials in `.env`
+3. **Test Connection**: Run `ts-node src/test-mcp-connection.ts`
+4. **Check Logs**: Look for `[MCP-POOL]`, `[MCP-CLIENT]`, and `[MCP]` prefixes
+
+### Common Issues
+- **"MCP server not found"**: Verify the path exists and is executable
+- **Generic tool responses**: Ensure you're running the enhanced version (`npm run dev`)
+- **WebSocket disconnections**: Check Redis connection if using session persistence
+
+### Debug Tools
+- **Debug Status Panel**: Shows real-time connection status
+- **Developer Tools Panel**: Monitor system metrics and tool executions
+- **Test Checklist Panel**: Run automated tests for all components
+
 ## Contributing
 
 This project uses AI-assisted development. When contributing:
@@ -149,6 +216,7 @@ This project uses AI-assisted development. When contributing:
 2. Maintain TypeScript type safety
 3. Test all ServiceNow operations
 4. Update documentation
+5. Add comprehensive logging for debugging
 
 ## License
 

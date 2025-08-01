@@ -1,0 +1,312 @@
+/* Claude-style UI enhancements */
+
+/* Tool invocation styling to match Claude exactly */
+.claude-tool-invocation {
+  @apply bg-gray-50 border border-gray-200 rounded-lg mb-4 overflow-hidden;
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+}
+
+.claude-tool-header {
+  @apply bg-white border-b border-gray-200 px-4 py-3;
+}
+
+.claude-tool-header-content {
+  @apply flex items-center justify-between;
+}
+
+.claude-tool-name {
+  @apply flex items-center space-x-2 text-sm font-medium text-gray-800;
+}
+
+.claude-tool-status {
+  @apply flex items-center space-x-2;
+}
+
+.claude-tool-status.executing {
+  @apply text-blue-600;
+}
+
+.claude-tool-status.completed {
+  @apply text-green-600;
+}
+
+.claude-tool-status.error {
+  @apply text-red-600;
+}
+
+.claude-tool-timing {
+  @apply text-xs text-gray-500 font-mono;
+}
+
+/* Collapsible sections */
+.claude-collapsible-section {
+  @apply border-t border-gray-200;
+}
+
+.claude-collapsible-header {
+  @apply flex items-center justify-between px-4 py-2 bg-gray-50 hover:bg-gray-100 cursor-pointer transition-colors duration-150;
+}
+
+.claude-collapsible-title {
+  @apply text-sm font-medium text-gray-700 flex items-center space-x-2;
+}
+
+.claude-collapsible-content {
+  @apply bg-white;
+}
+
+.claude-collapsible-content.expanded {
+  @apply border-t border-gray-200;
+}
+
+/* Code styling to match Claude's syntax highlighting */
+.claude-code-block {
+  @apply relative;
+  font-family: 'SF Mono', Monaco, 'Cascadia Code', 'Roboto Mono', Consolas, 'Courier New', monospace;
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+.claude-code-block pre {
+  @apply m-0 p-4 overflow-x-auto;
+  background: #fafafa !important;
+}
+
+.claude-code-block code {
+  @apply text-sm;
+  background: transparent !important;
+}
+
+/* Copy button styling */
+.claude-copy-button {
+  @apply absolute top-2 right-2 p-1.5 rounded bg-white border border-gray-200 shadow-sm hover:bg-gray-50 transition-colors duration-150;
+  opacity: 0;
+  transition: opacity 0.15s ease-in-out;
+}
+
+.claude-code-block:hover .claude-copy-button {
+  opacity: 1;
+}
+
+.claude-copy-button.copied {
+  @apply bg-green-50 border-green-200 text-green-600;
+  opacity: 1;
+}
+
+/* Message styling */
+.claude-message {
+  @apply mb-6;
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+}
+
+.claude-message-content {
+  @apply text-gray-800 leading-relaxed;
+  font-size: 15px;
+  line-height: 1.6;
+}
+
+.claude-message-content p {
+  @apply mb-4 last:mb-0;
+}
+
+.claude-message-content ul,
+.claude-message-content ol {
+  @apply mb-4 pl-6;
+}
+
+.claude-message-content li {
+  @apply mb-1;
+}
+
+.claude-message-content h1,
+.claude-message-content h2,
+.claude-message-content h3,
+.claude-message-content h4,
+.claude-message-content h5,
+.claude-message-content h6 {
+  @apply font-semibold mb-3 mt-6 first:mt-0;
+}
+
+.claude-message-content h1 { @apply text-xl; }
+.claude-message-content h2 { @apply text-lg; }
+.claude-message-content h3 { @apply text-base; }
+
+.claude-message-content code:not(pre code) {
+  @apply bg-gray-100 px-1.5 py-0.5 rounded text-sm font-mono;
+}
+
+/* Thinking indicator */
+.claude-thinking {
+  @apply flex items-center space-x-2 text-gray-600 text-sm py-2;
+}
+
+.claude-thinking-dots {
+  @apply flex space-x-1;
+}
+
+.claude-thinking-dot {
+  @apply w-1.5 h-1.5 rounded-full bg-gray-400;
+  animation: claude-thinking-pulse 1.4s infinite ease-in-out both;
+}
+
+.claude-thinking-dot:nth-child(1) { animation-delay: -0.32s; }
+.claude-thinking-dot:nth-child(2) { animation-delay: -0.16s; }
+
+@keyframes claude-thinking-pulse {
+  0%, 80%, 100% {
+    transform: scale(0.8);
+    opacity: 0.5;
+  }
+  40% {
+    transform: scale(1);
+    opacity: 1;
+  }
+}
+
+/* Tool execution progress */
+.claude-tool-progress {
+  @apply flex items-center space-x-2 px-4 py-2 bg-blue-50 border-t border-blue-200 text-sm text-blue-700;
+}
+
+.claude-tool-progress-spinner {
+  @apply animate-spin w-4 h-4;
+}
+
+/* Web search/fetch result styling */
+.claude-web-result {
+  @apply bg-blue-50 border-l-4 border-blue-400 p-4 rounded-r-lg;
+}
+
+.claude-web-result-header {
+  @apply flex items-center space-x-2 mb-2;
+}
+
+.claude-web-result-title {
+  @apply font-medium text-blue-900;
+}
+
+.claude-web-result-url {
+  @apply text-xs text-blue-600 font-mono break-all;
+}
+
+.claude-web-result-content {
+  @apply text-sm text-blue-800 max-h-32 overflow-y-auto;
+}
+
+/* Error states */
+.claude-error {
+  @apply bg-red-50 border border-red-200 rounded-lg p-4;
+}
+
+.claude-error-header {
+  @apply flex items-center space-x-2 mb-2;
+}
+
+.claude-error-title {
+  @apply font-medium text-red-800;
+}
+
+.claude-error-message {
+  @apply text-sm text-red-700;
+}
+
+/* Animations */
+.claude-slide-in {
+  animation: claude-slide-in 0.2s ease-out;
+}
+
+.claude-fade-in {
+  animation: claude-fade-in 0.15s ease-out;
+}
+
+@keyframes claude-slide-in {
+  from {
+    opacity: 0;
+    transform: translateY(-4px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@keyframes claude-fade-in {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+/* Hover states */
+.claude-hover-lift {
+  transition: transform 0.15s ease-out, box-shadow 0.15s ease-out;
+}
+
+.claude-hover-lift:hover {
+  transform: translateY(-1px);
+  box-shadow: 0 4px 8px rgba(0, 0, 0, 0.1);
+}
+
+/* Mobile responsiveness */
+@media (max-width: 640px) {
+  .claude-tool-invocation {
+    @apply mx-2;
+  }
+  
+  .claude-tool-header-content {
+    @apply flex-col items-start space-y-2;
+  }
+  
+  .claude-tool-status {
+    @apply self-end;
+  }
+  
+  .claude-code-block {
+    font-size: 12px;
+  }
+  
+  .claude-message-content {
+    font-size: 14px;
+  }
+}
+
+/* Dark mode support (if needed) */
+@media (prefers-color-scheme: dark) {
+  .claude-tool-invocation {
+    @apply bg-gray-800 border-gray-700;
+  }
+  
+  .claude-tool-header {
+    @apply bg-gray-900 border-gray-700;
+  }
+  
+  .claude-tool-name {
+    @apply text-gray-200;
+  }
+  
+  .claude-collapsible-header {
+    @apply bg-gray-800 hover:bg-gray-700;
+  }
+  
+  .claude-collapsible-title {
+    @apply text-gray-300;
+  }
+  
+  .claude-collapsible-content {
+    @apply bg-gray-900;
+  }
+  
+  .claude-code-block pre {
+    background: #1a1a1a !important;
+  }
+  
+  .claude-copy-button {
+    @apply bg-gray-800 border-gray-600 text-gray-300 hover:bg-gray-700;
+  }
+  
+  .claude-message-content {
+    @apply text-gray-200;
+  }
+}

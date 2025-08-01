@@ -1,8 +1,9 @@
 import React from 'react';
 import { useOutletContext } from 'react-router-dom';
 import Sidebar from '../components/Sidebar';
-import EnhancedChatInterface from '../components/EnhancedChatInterface';
+import EnhancedChatInterface from '../components/NewEnhancedChatInterface';
 import ActivityPanel from '../components/ActivityPanel';
+import DebugStatusPanel from '../components/DebugStatusPanel';
 import { Socket } from 'socket.io-client';
 
 interface OutletContext {
@@ -32,6 +33,9 @@ function ChatView() {
       <div className="w-80 bg-surface border-l border-gray-700 flex-shrink-0">
         <ActivityPanel socket={socket} />
       </div>
+      
+      {/* Debug Status Panel (floating) */}
+      <DebugStatusPanel socket={socket} selectedModel={selectedModel} />
     </>
   );
 }

@@ -6,6 +6,7 @@ import dotenv from 'dotenv';
 import { MCPClientManager } from './mcp/mcp-client';
 import { ChatHandler } from './websocket/chat-handler';
 import { StreamHandler } from './websocket/stream-handler';
+import { TestHandlers } from './websocket/test-handlers';
 import { authenticateSocket, AuthenticatedSocket } from './middleware/socketAuth';
 import { createLogger } from './utils/logger';
 import authRoutes from './routes/auth';
@@ -13,6 +14,8 @@ import projectRoutes from './routes/projects';
 import documentRoutes from './routes/documents';
 import activityRoutes from './routes/activity';
 import chatRoutes from './routes/chats';
+import healthRoutes from './routes/health';
+import testMcpRoutes from './routes/test-mcp';
 
 dotenv.config();
 
@@ -20,8 +23,9 @@ const app = express();
 const server = createServer(app);
 const io = new Server(server, {
   cors: {
-    origin: process.env.CLIENT_URL || "http://localhost:3000",
-    methods: ["GET", "POST"]
+    origin: ["http://localhost:3000", "http://127.0.0.1:3000"],
+    methods: ["GET", "POST"],
+    credentials: true
   }
 });
 
@@ -29,7 +33,10 @@ const logger = createLogger();
 const PORT = process.env.PORT || 3001;
 
 // Middleware
-app.use(cors());
+app.use(cors({
+  origin: ["http://localhost:3000", "http://127.0.0.1:3000"],
+  credentials: true
+}));
 app.use(express.json());
 
 // Routes
@@ -39,14 +46,25 @@ app.use('/api/documents', documentRoutes);
 app.use('/api/activity', activityRoutes);
 app.use('/api/chats', chatRoutes);
 
-// Health check endpoint
-app.get('/api/health', (req, res) => {
-  res.json({ status: 'healthy', timestamp: new Date().toISOString() });
-});
+// Health check routes
+app.use('/health', healthRoutes);
+app.use('/api/health', healthRoutes);
+
+// Test MCP routes (for debugging)
+app.use('/test-mcp', testMcpRoutes);
+
+// Test chat routes (for debugging)
+import testChatRoutes from './routes/test-chat';
+app.use('/test-chat', testChatRoutes);
+
+// Test LLM + Tools routes (for debugging)
+import testLlmToolsRoutes from './routes/test-llm-tools';
+app.use('/test-llm-tools', testLlmToolsRoutes);
 
 // Initialize MCP client manager
 const mcpClientManager = new MCPClientManager();
 const chatHandler = new ChatHandler(mcpClientManager);
+const testHandlers = new TestHandlers(mcpClientManager);
 const streamHandler = new StreamHandler();
 
 // Socket.io authentication middleware
@@ -55,6 +73,9 @@ io.use(authenticateSocket);
 // Socket.io connection handling
 io.on('connection', (socket: AuthenticatedSocket) => {
   logger.info(`Client connected: ${socket.id} (User: ${socket.user?.email})`);
+
+  // Setup test handlers for development tools
+  testHandlers.setupTestHandlers(socket);
 
   // Handle chat messages
   socket.on('chat:message', async (data) => {

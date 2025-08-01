@@ -2,27 +2,27 @@ import React, { useEffect, useState, useRef } from 'react';
 import { Socket } from 'socket.io-client';
 import { Send, Loader2 } from 'lucide-react';
 import Message from './Message';
-import ToolInvocation from './ToolInvocation';
+import ThinkingIndicator from './ThinkingIndicator';
 import { useAuth } from '../contexts/AuthContext';
 import chatService, { ChatSession as ChatSessionType } from '../services/chat';
+
+interface ToolCall {
+  id?: string;
+  name: string;
+  arguments: any;
+  result?: any;
+  status: 'pending' | 'executing' | 'completed' | 'error';
+  executionTime?: number;
+}
 
 interface EnhancedMessage {
   id: string;
   role: 'user' | 'assistant';
   content: string;
-  toolInvocations?: ToolInvocationData[];
+  toolCalls?: ToolCall[];
   timestamp: Date;
   model?: string;
   isStreaming?: boolean;
-}
-
-interface ToolInvocationData {
-  id: string;
-  name: string;
-  arguments: Record<string, any>;
-  status: 'pending' | 'executing' | 'completed' | 'error';
-  result?: any;
-  error?: string;
 }
 
 interface EnhancedChatInterfaceProps {
@@ -43,11 +43,27 @@ const EnhancedChatInterface: React.FC<EnhancedChatInterfaceProps> = ({
   const [streamingMessageId, setStreamingMessageId] = useState<string | null>(null);
   const [currentSession, setCurrentSession] = useState<ChatSessionType | null>(null);
   const [isLoadingSession, setIsLoadingSession] = useState(false);
+  const [executingTools, setExecutingTools] = useState<Array<{
+    id: string;
+    name: string;
+    status: 'pending' | 'executing' | 'completed' | 'error';
+    displayName: string;
+  }>>([]);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
 
   const scrollToBottom = () => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+  };
+
+  const getToolDisplayName = (name: string) => {
+    if (name === 'web_search') return 'Web Search';
+    if (name === 'web_fetch') return 'Web Fetch';
+    
+    return name.replace('servicenow-mcp:', '')
+      .split('-')
+      .map(word => word.charAt(0).toUpperCase() + word.slice(1))
+      .join(' ');
   };
 
   useEffect(() => {
@@ -84,7 +100,7 @@ const EnhancedChatInterface: React.FC<EnhancedChatInterfaceProps> = ({
               content: msg.content,
               timestamp: new Date(msg.timestamp),
               model: msg.model || undefined,
-              toolInvocations: [] // TODO: Load from tool executions
+              toolCalls: [] // TODO: Load from tool executions
             }));
             setMessages(formattedMessages);
           }
@@ -115,7 +131,7 @@ const EnhancedChatInterface: React.FC<EnhancedChatInterfaceProps> = ({
         content: '',
         timestamp: new Date(),
         isStreaming: true,
-        toolInvocations: []
+        toolCalls: []
       };
       
       setMessages(prev => [...prev, assistantMessage]);
@@ -127,7 +143,8 @@ const EnhancedChatInterface: React.FC<EnhancedChatInterfaceProps> = ({
       type: string; 
       content: string;
     }) => {
-      if (type === 'text' || type === 'tool_result') {
+      // Only add text content to message content, tool_result will be handled by ToolInvocation components
+      if (type === 'text') {
         setMessages(prev => prev.map(msg => 
           msg.id === messageId 
             ? { ...msg, content: msg.content + content }
@@ -137,17 +154,27 @@ const EnhancedChatInterface: React.FC<EnhancedChatInterfaceProps> = ({
     };
 
     // Handle tool execution start
-    const handleToolStart = ({ messageId, toolId, toolName, arguments: args }: {
+    const handleToolStart = ({ messageId, toolName, arguments: args }: {
       messageId: string;
-      toolId: string;
       toolName: string;
       arguments: any;
     }) => {
-      console.log('🛠️ Tool started:', { toolId, toolName });
+      console.log('🛠️ Tool started:', { toolName });
+      
+      const toolId = `tool-${Date.now()}-${Math.random()}`;
+      const displayName = getToolDisplayName(toolName);
+      
+      // Add to executing tools for ThinkingIndicator
+      setExecutingTools(prev => [...prev, {
+        id: toolId,
+        name: toolName,
+        status: 'executing',
+        displayName
+      }]);
       
       setMessages(prev => prev.map(msg => {
         if (msg.id === messageId) {
-          const newToolInvocation: ToolInvocationData = {
+          const newToolCall: ToolCall = {
             id: toolId,
             name: toolName,
             arguments: args,
@@ -156,7 +183,7 @@ const EnhancedChatInterface: React.FC<EnhancedChatInterfaceProps> = ({
           
           return {
             ...msg,
-            toolInvocations: [...(msg.toolInvocations || []), newToolInvocation]
+            toolCalls: [...(msg.toolCalls || []), newToolCall]
           };
         }
         return msg;
@@ -164,28 +191,29 @@ const EnhancedChatInterface: React.FC<EnhancedChatInterfaceProps> = ({
     };
 
     // Handle tool execution result
-    const handleToolResult = ({ messageId, toolId, toolName, result, success }: {
+    const handleToolResult = ({ messageId, toolName, result, success }: {
       messageId: string;
-      toolId: string;
       toolName: string;
       result: any;
       success: boolean;
     }) => {
-      console.log('✅ Tool completed:', { toolId, toolName, success });
+      console.log('✅ Tool completed:', { toolName, success });
+      
+      // Remove from executing tools
+      setExecutingTools(prev => prev.filter(tool => tool.name !== toolName));
       
       setMessages(prev => prev.map(msg => {
         if (msg.id === messageId) {
           return {
             ...msg,
-            toolInvocations: msg.toolInvocations?.map(inv =>
-              inv.id === toolId
+            toolCalls: msg.toolCalls?.map(tool =>
+              tool.name === toolName && tool.status === 'executing'
                 ? { 
-                    ...inv, 
+                    ...tool, 
                     status: success ? 'completed' : 'error',
-                    result: success ? result : undefined,
-                    error: success ? undefined : result?.error || 'Tool execution failed'
+                    result: result
                   }
-                : inv
+                : tool
             )
           };
         }
@@ -198,8 +226,8 @@ const EnhancedChatInterface: React.FC<EnhancedChatInterfaceProps> = ({
       messageId: string; 
       message: any;
     }) => {
-      console.log('🏁 Stream completed:', messageId);
       setStreamingMessageId(null);
+      setExecutingTools([]); // Clear all executing tools when stream completes
       
       setMessages(prev => prev.map(msg => 
         msg.id === messageId 
@@ -207,13 +235,14 @@ const EnhancedChatInterface: React.FC<EnhancedChatInterfaceProps> = ({
               ...msg, 
               content: message.content,
               isStreaming: false,
-              toolInvocations: message.toolCalls?.map((tc: any) => ({
-                id: `tool-${Date.now()}-${Math.random()}`,
+              toolCalls: message.toolCalls?.map((tc: any) => ({
+                id: tc.id || `tool-${Date.now()}-${Math.random()}`,
                 name: tc.name,
                 arguments: tc.arguments,
                 status: tc.status || 'completed',
-                result: tc.result
-              })) || msg.toolInvocations
+                result: tc.result,
+                executionTime: tc.executionTime
+              })) || msg.toolCalls
             }
           : msg
       ));
@@ -224,6 +253,7 @@ const EnhancedChatInterface: React.FC<EnhancedChatInterfaceProps> = ({
       console.error('❌ Stream error:', error);
       setIsLoading(false);
       setStreamingMessageId(null);
+      setExecutingTools([]); // Clear executing tools on error
       
       if (messageId) {
         setMessages(prev => prev.map(msg => 
@@ -303,66 +333,6 @@ const EnhancedChatInterface: React.FC<EnhancedChatInterfaceProps> = ({
     textarea.style.height = Math.min(textarea.scrollHeight, 200) + 'px';
   };
 
-  const renderMessage = (message: EnhancedMessage) => {
-    // Parse message content and insert tool invocations
-    const parts = message.content.split(/\[TOOL_INVOCATION_(\d+)\]/);
-    const elements: React.ReactNode[] = [];
-    
-    parts.forEach((part, index) => {
-      if (index % 2 === 0) {
-        // Text content
-        if (part.trim()) {
-          elements.push(
-            <div key={`text-${index}`} className="whitespace-pre-wrap">
-              {part}
-            </div>
-          );
-        }
-      } else {
-        // Tool invocation placeholder - render actual tool invocation
-        const invocationIndex = parseInt(part);
-        const invocation = message.toolInvocations?.[invocationIndex];
-        if (invocation) {
-          elements.push(
-            <ToolInvocation
-              key={`tool-${invocation.id}`}
-              toolCall={{
-                name: invocation.name,
-                arguments: invocation.arguments,
-                status: invocation.status,
-                result: invocation.result
-              }}
-            />
-          );
-        }
-      }
-    });
-    
-    // If no tool invocation placeholders were found, render tool invocations at the end
-    if (!message.content.includes('[TOOL_INVOCATION_') && message.toolInvocations) {
-      message.toolInvocations.forEach((invocation) => {
-        elements.push(
-          <ToolInvocation
-            key={`tool-${invocation.id}`}
-            toolCall={{
-              name: invocation.name,
-              arguments: invocation.arguments,
-              status: invocation.status,
-              result: invocation.result
-            }}
-          />
-        );
-      });
-    }
-    
-    return (
-      <div className="space-y-2">
-        {elements.length > 0 ? elements : (
-          <div className="whitespace-pre-wrap">{message.content}</div>
-        )}
-      </div>
-    );
-  };
 
   return (
     <div className="h-full flex flex-col">
@@ -390,32 +360,29 @@ const EnhancedChatInterface: React.FC<EnhancedChatInterfaceProps> = ({
           </div>
         ) : (
           messages.map((message) => (
-            <div key={message.id}>
-              {message.role === 'user' ? (
-                <Message message={{
-                  id: message.id,
-                  role: message.role,
-                  content: message.content,
-                  timestamp: message.timestamp
-                }} />
-              ) : (
-                <div className="space-y-2">
-                  <Message message={{
-                    id: message.id,
-                    role: message.role,
-                    content: message.content.split(/\[TOOL_INVOCATION_\d+\]/).join('').trim() || 'Working on your request...',
-                    timestamp: message.timestamp,
-                    model: message.model,
-                    isStreaming: message.isStreaming
-                  }} />
-                  {renderMessage(message)}
-                </div>
-              )}
-            </div>
+            <Message 
+              key={message.id} 
+              message={{
+                id: message.id,
+                role: message.role,
+                content: message.content,
+                timestamp: message.timestamp,
+                model: message.model,
+                isStreaming: message.isStreaming,
+                toolCalls: message.toolCalls
+              }} 
+            />
           ))
         )}
         
-        {isLoading && !streamingMessageId && (
+        {/* Show thinking indicator when tools are executing */}
+        <ThinkingIndicator 
+          isVisible={executingTools.length > 0}
+          executingTools={executingTools}
+          message={executingTools.length > 0 ? 'Executing ServiceNow operations...' : 'Thinking...'}
+        />
+        
+        {isLoading && !streamingMessageId && executingTools.length === 0 && (
           <div className="flex items-center space-x-2 text-gray-400 bg-surface-light rounded-lg p-4">
             <Loader2 className="w-5 h-5 animate-spin text-primary" />
             <div className="flex flex-col">

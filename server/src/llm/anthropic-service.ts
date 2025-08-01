@@ -1,6 +1,8 @@
 import Anthropic from '@anthropic-ai/sdk';
 import { LLMService, LLMMessage, LLMResponse, LLMStreamChunk } from './llm-interface';
+import { MCPToolCall } from '../mcp/mcp-client';
 import { createLogger } from '../utils/logger';
+import { buildSystemPrompt } from './system-prompt';
 
 const logger = createLogger();
 
@@ -43,23 +45,35 @@ export class AnthropicService extends LLMService {
         model: this.model,
         messageCount: userMessages.length,
         systemMessageLength: systemMessage.length,
-        hasTools: this.availableTools.length > 0
+        mcpToolCount: this.availableTools.mcp.length,
+        webToolCount: this.availableTools.web.length,
+        totalToolCount: this.availableTools.mcp.length + this.availableTools.web.length
       });
+
+      // Format tools for Claude's native tool calling
+      const allTools = [...this.availableTools.mcp, ...this.availableTools.web];
+      const tools = allTools.length > 0 ? allTools.map(tool => ({
+        name: tool.name,
+        description: tool.description || 'No description available',
+        input_schema: tool.inputSchema
+      })) : undefined;
 
       const stream = await this.client.messages.create({
         model: this.model,
-        max_tokens: 4096, // More reasonable limit
+        max_tokens: 4096,
         temperature: 0.7,
         system: systemMessage,
         messages: userMessages.map(msg => ({
           role: msg.role as 'user' | 'assistant',
           content: msg.content
         })),
+        tools: tools,
         stream: true,
       });
 
       let fullContent = '';
       let usage = { promptTokens: 0, completionTokens: 0, totalTokens: 0 };
+      let toolCalls: MCPToolCall[] = [];
 
       for await (const chunk of stream) {
         if (chunk.type === 'content_block_delta' && chunk.delta.type === 'text_delta') {
@@ -68,6 +82,16 @@ export class AnthropicService extends LLMService {
             type: 'text',
             content: chunk.delta.text
           });
+        }
+
+        // Handle Claude's native tool calls
+        if (chunk.type === 'content_block_start' && chunk.content_block.type === 'tool_use') {
+          const toolCall: MCPToolCall = {
+            name: chunk.content_block.name,
+            arguments: chunk.content_block.input || {}
+          };
+          toolCalls.push(toolCall);
+          logger.info(`Claude tool call detected: ${toolCall.name}`, { arguments: toolCall.arguments });
         }
 
         if (chunk.type === 'message_delta' && chunk.usage) {
@@ -79,8 +103,13 @@ export class AnthropicService extends LLMService {
         }
       }
 
-      const toolCalls = this.parseToolCalls(fullContent);
-      const cleanContent = this.removeToolCallsFromContent(fullContent);
+      // If no native tool calls were found, try to parse from content as fallback
+      if (toolCalls.length === 0) {
+        toolCalls = this.parseToolCalls(fullContent);
+        fullContent = this.removeToolCallsFromContent(fullContent);
+      }
+
+      const cleanContent = fullContent;
 
       return {
         message: cleanContent,
@@ -116,30 +145,9 @@ export class AnthropicService extends LLMService {
   }
 
   private formatSystemMessage(): string {
-    return `You are a ServiceNow AI assistant that helps users manage their ServiceNow instance through natural language.
-
-${this.formatToolsForLLM()}
-
-Core Behavior Guidelines:
-- ALWAYS be proactive and complete multi-step workflows automatically
-- When a user requests something complex, break it down and execute ALL necessary steps
-- Use multiple tools in sequence to complete full workflows
-- Provide real-time progress updates as you work
-- After creating records, immediately set up related configurations
-- Suggest logical next steps and offer to execute them automatically
-
-Workflow Examples:
-- "Create catalog item" → Create item + Add variables + Set approval workflow + Configure UI policies
-- "New incident process" → Create incident template + Set assignment rules + Configure notifications
-- "Setup hardware request" → Create catalog item + Add approval chain + Configure variables + Test workflow
-
-Communication Style:
-- Start with "I'll help you [specific task]" 
-- Show each step: "Creating catalog item..." → "Adding variables..." → "Setting up workflow..."
-- Always end with: "What would you like to configure next?" or "Shall I set up [related feature]?"
-- Use tool calls immediately - don't wait for user confirmation on obvious next steps
-- Be enthusiastic and solution-oriented
-
-Remember: Complete workflows, don't just do single tasks. Think like a ServiceNow expert who anticipates needs.`;
+    return buildSystemPrompt({
+      instanceUrl: process.env.SERVICENOW_INSTANCE_URL,
+      userTimezone: 'UTC'
+    });
   }
 }

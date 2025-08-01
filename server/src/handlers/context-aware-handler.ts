@@ -1,12 +1,15 @@
 import { LLMService, LLMMessage } from '../llm/llm-interface';
 import { MCPClientManager } from '../mcp/mcp-client';
+import { EnhancedToolExecutor } from '../mcp/enhanced-tool-executor';
 import { buildSystemPrompt } from '../llm/system-prompt';
 import { EnhancedStreamHandler } from '../websocket/enhanced-stream-handler';
 import { ResultFormatter } from '../utils/result-formatter';
 import { AuthenticatedSocket } from '../middleware/socketAuth';
 import { createLogger } from '../utils/logger';
+import { PrismaClient, ToolExecutionStatus } from '@prisma/client';
 
 const logger = createLogger();
+const prisma = new PrismaClient();
 
 interface Message {
   role: 'user' | 'assistant' | 'system';
@@ -22,12 +25,14 @@ interface ConversationContext {
     recentRecords: string[];
     currentWorkflow: string | null;
   };
+  dbSessionId?: string;
 }
 
 export class ContextAwareMessageHandler {
   private conversationHistory: Map<string, ConversationContext> = new Map();
   private streamHandler: EnhancedStreamHandler;
   private resultFormatter: ResultFormatter;
+  private enhancedToolExecutor: EnhancedToolExecutor;
   
   constructor(
     private mcpClientManager: MCPClientManager,
@@ -35,6 +40,7 @@ export class ContextAwareMessageHandler {
   ) {
     this.streamHandler = new EnhancedStreamHandler(mcpClientManager);
     this.resultFormatter = new ResultFormatter(this.instanceUrl);
+    this.enhancedToolExecutor = new EnhancedToolExecutor(mcpClientManager);
   }
 
   async processMessage(
@@ -52,11 +58,36 @@ export class ContextAwareMessageHandler {
       // Get or create conversation context
       const context = this.getOrCreateContext(userId);
       
+      // Get or create database session
+      let dbSessionId = context.dbSessionId;
+      if (!dbSessionId) {
+        const dbSession = await prisma.chatSession.create({
+          data: {
+            userId,
+            model,
+            contextLimit: this.getContextLimit(model),
+            title: 'New Chat'
+          }
+        });
+        dbSessionId = dbSession.id;
+        context.dbSessionId = dbSessionId;
+      }
+      
+      // Create user message in database
+      const userDbMessage = await prisma.message.create({
+        data: {
+          role: 'USER',
+          content: message,
+          sessionId: dbSessionId,
+          model: model
+        }
+      });
+      
       // Add user message to context
       const userMessage: Message = {
         role: 'user',
         content: message,
-        timestamp: new Date()
+        timestamp: userDbMessage.createdAt
       };
       context.messages.push(userMessage);
       
@@ -67,46 +98,118 @@ export class ContextAwareMessageHandler {
       // Build conversation messages for LLM
       const llmMessages = this.buildLLMMessages(context, needsTools);
       
-      // Configure LLM service
+      // Configure LLM service with all available tools
       if (needsTools) {
-        llmService.setAvailableTools(this.mcpClientManager.getAvailableTools());
+        logger.info('🔧 Configuring LLM with tools...');
+        const allTools = this.enhancedToolExecutor.getAllAvailableTools();
+        logger.info('📚 Available tools from enhanced executor:', { 
+          totalTools: allTools.length,
+          toolNames: allTools.map(t => t.name),
+          toolTypes: allTools.map(t => t.type)
+        });
+        
+        const toolsForLLM = {
+          mcp: allTools.filter(t => t.type === 'mcp').map(t => ({ ...t, type: undefined })),
+          web: allTools.filter(t => t.type === 'web')
+        };
+        
+        logger.info('🎯 Tools configured for LLM:', {
+          mcpToolCount: toolsForLLM.mcp.length,
+          webToolCount: toolsForLLM.web.length,
+          mcpToolNames: toolsForLLM.mcp.map(t => t.name)
+        });
+        
+        llmService.setAvailableTools(toolsForLLM);
+      } else {
+        logger.info('🚫 No tools needed for this message');
       }
       
+      // Create assistant message in database
+      const assistantDbMessage = await prisma.message.create({
+        data: {
+          role: 'ASSISTANT',
+          content: '',
+          sessionId: dbSessionId,
+          model: model
+        }
+      });
+
+      // Start streaming response
+      socket.emit('chat:stream_start', { messageId: assistantDbMessage.id });
+
       // Generate streaming response
       const response = await llmService.generateResponse(
         llmMessages,
         (chunk) => {
           // Stream text chunks to client
           if (chunk.type === 'text') {
-            socket.emit('chat:stream', {
-              messageId,
-              type: 'text',
-              content: chunk.content
+            socket.emit('chat:text_stream', {
+              messageId: assistantDbMessage.id,
+              chunk: chunk.content
             });
           }
         }
       );
       
-      logger.info('LLM response received:', { hasToolCalls: !!response.toolCalls?.length });
+      logger.info('🤖 LLM response received:', { 
+        hasToolCalls: !!response.toolCalls?.length,
+        toolCallsCount: response.toolCalls?.length || 0,
+        messageLength: response.message?.length || 0,
+        fullResponse: JSON.stringify(response, null, 2)
+      });
       
       // Handle tool calls if present
       let finalContent = response.message;
       const toolInvocations: any[] = [];
       
       if (response.toolCalls && response.toolCalls.length > 0) {
+        logger.info(`🔧 Processing ${response.toolCalls.length} tool calls:`, response.toolCalls.map(t => t.name));
+        
         for (const toolCall of response.toolCalls) {
+          let toolExecution;
+          let executionStartTime: number;
           try {
+            logger.info(`🚀 Starting tool execution: ${toolCall.name}`, { arguments: toolCall.arguments });
+            
+            // Emit tool start event for UI
+            socket.emit('chat:tool_start', {
+              messageId: assistantDbMessage.id,
+              toolName: toolCall.name,
+              arguments: toolCall.arguments
+            });
             logger.info(`Executing tool: ${toolCall.name}`, { arguments: toolCall.arguments });
             
+            // Record execution start time
+            executionStartTime = Date.now();
+            
+            // Create tool execution record
+            toolExecution = await prisma.toolExecution.create({
+              data: {
+                messageId: assistantDbMessage.id,
+                toolName: toolCall.name,
+                arguments: JSON.stringify(toolCall.arguments),
+                status: ToolExecutionStatus.EXECUTING
+              }
+            });
+
             // Notify client of tool start
             socket.emit('chat:tool_start', {
-              messageId,
+              messageId: assistantDbMessage.id,
               toolName: toolCall.name,
               arguments: toolCall.arguments
             });
             
-            // Execute the tool
-            const toolResult = await this.mcpClientManager.executeTool(toolCall);
+            // Execute the tool using enhanced executor
+            const enhancedToolCall = {
+              id: toolCall.id || Date.now().toString(),
+              name: toolCall.name,
+              arguments: toolCall.arguments,
+              type: this.enhancedToolExecutor.getToolType(toolCall.name)
+            };
+            const toolResult = await this.enhancedToolExecutor.executeTool(enhancedToolCall);
+            
+            // Calculate execution time
+            const executionTime = Date.now() - executionStartTime!;
             
             // Format the result for user display
             const formattedResult = this.resultFormatter.formatToolResult(
@@ -117,48 +220,82 @@ export class ContextAwareMessageHandler {
             // Update conversation context with ServiceNow data
             this.updateServiceNowContext(context, toolCall.name, toolResult);
             
-            // Add formatted result to message content
-            finalContent += `\n\n${formattedResult}`;
-            
-            // Add to tool invocations for context
+            // Add to tool invocations for context (but don't add to finalContent to avoid duplication)
             toolInvocations.push({
               name: toolCall.name,
               arguments: toolCall.arguments,
               result: toolResult,
-              formattedResult
+              formattedResult,
+              executionTime
             });
             
-            // Stream the formatted result
-            socket.emit('chat:stream', {
-              messageId,
-              type: 'tool_result',
-              content: `\n\n${formattedResult}`
+            // Update tool execution with result
+            await prisma.toolExecution.update({
+              where: { id: toolExecution.id },
+              data: {
+                result: JSON.stringify(toolResult),
+                status: toolResult.isError ? ToolExecutionStatus.FAILED : ToolExecutionStatus.COMPLETED,
+                executionTime
+              }
             });
-            
-            // Notify client of tool completion
-            socket.emit('chat:tool_result', {
-              messageId,
+
+            logger.info(`✅ Tool execution completed: ${toolCall.name}`, { 
+              success: !toolResult.isError, 
+              executionTime,
+              resultType: typeof toolResult 
+            });
+
+            // Emit proper tool completion event for UI
+            socket.emit('chat:tool_complete', {
+              messageId: assistantDbMessage.id,
               toolName: toolCall.name,
+              arguments: toolCall.arguments,
               result: toolResult,
-              success: !toolResult.isError
+              executionTime,
+              status: toolResult.isError ? 'error' : 'completed'
             });
             
-            logger.info(`Tool execution completed: ${toolCall.name}`, { success: !toolResult.isError });
+            // Store for final message composition
+            toolInvocations.push({
+              name: toolCall.name,
+              arguments: toolCall.arguments,
+              result: toolResult,
+              executionTime,
+              status: toolResult.isError ? 'error' : 'completed'
+            });
             
           } catch (error) {
-            logger.error(`Tool execution failed: ${toolCall.name}`, error);
+            logger.error(`❌ Tool execution failed: ${toolCall.name}`, error);
             
-            const errorMessage = `❌ ${toolCall.name} failed: ${error instanceof Error ? error.message : 'Unknown error'}`;
-            finalContent += `\n\n${errorMessage}`;
+            // Update tool execution with error if it was created
+            if (toolExecution) {
+              await prisma.toolExecution.update({
+                where: { id: toolExecution.id },
+                data: {
+                  status: ToolExecutionStatus.FAILED,
+                  error: error instanceof Error ? error.message : 'Unknown error'
+                }
+              });
+            }
             
-            socket.emit('chat:stream', {
-              messageId,
-              type: 'tool_result', 
-              content: `\n\n${errorMessage}`
+            // Emit tool error event for UI
+            socket.emit('chat:tool_error', {
+              messageId: assistantDbMessage.id,
+              toolName: toolCall.name,
+              arguments: toolCall.arguments,
+              error: error instanceof Error ? error.message : 'Unknown error'
+            });
+            
+            // Store error for final message composition
+            toolInvocations.push({
+              name: toolCall.name,
+              arguments: toolCall.arguments,
+              result: { isError: true, content: error instanceof Error ? error.message : 'Unknown error' },
+              status: 'error'
             });
             
             socket.emit('chat:tool_result', {
-              messageId,
+              messageId: assistantDbMessage.id,
               toolName: toolCall.name,
               result: { error: error instanceof Error ? error.message : 'Unknown error' },
               success: false
@@ -169,33 +306,54 @@ export class ContextAwareMessageHandler {
         context.lastToolUse = new Date();
       }
       
+      // Update assistant message content in database
+      await prisma.message.update({
+        where: { id: assistantDbMessage.id },
+        data: {
+          content: finalContent
+        }
+      });
+
       // Add assistant message to context
       const assistantMessage: Message = {
         role: 'assistant',
         content: finalContent,
         toolInvocations,
-        timestamp: new Date()
+        timestamp: assistantDbMessage.createdAt
       };
       context.messages.push(assistantMessage);
       
       // Complete the stream
       socket.emit('chat:stream_complete', {
-        messageId,
+        messageId: assistantDbMessage.id,
         message: {
-          id: messageId,
+          id: assistantDbMessage.id,
           role: 'assistant',
           content: finalContent,
-          timestamp: new Date(),
+          timestamp: assistantDbMessage.createdAt,
           toolCalls: toolInvocations.map(inv => ({
             name: inv.name,
             arguments: inv.arguments,
             status: 'completed',
-            result: inv.result
+            result: inv.result,
+            executionTime: inv.executionTime
           })),
           model
         }
       });
       
+      // Emit activity log
+      if (toolInvocations.length > 0) {
+        socket.emit('activity:log', {
+          timestamp: assistantDbMessage.createdAt,
+          operations: toolInvocations.map(inv => ({
+            tool: inv.name,
+            arguments: inv.arguments,
+            success: !inv.result.isError
+          }))
+        });
+      }
+
       // Trim conversation history to prevent context overflow
       this.trimConversationHistory(context);
       
@@ -236,8 +394,24 @@ export class ContextAwareMessageHandler {
       'user', 'group', 'role', 'permission', 'access'
     ];
     
+    // Web search keywords that suggest need for web tools
+    const webSearchKeywords = [
+      'documentation', 'docs', 'best practice', 'example', 'tutorial',
+      'how to', 'guide', 'error', 'issue', 'problem solving', 'solution',
+      'troubleshoot', 'fix', 'latest', 'new', 'update', 'release',
+      'community', 'forum', 'discussion', 'reference', 'api reference'
+    ];
+    
+    // URL patterns that suggest web fetch
+    const hasUrl = /https?:\/\/[^\s]+/i.test(message);
+    
     // Check for operation keywords
     const hasOperationKeyword = operationKeywords.some(
+      keyword => lowercaseMessage.includes(keyword)
+    );
+    
+    // Check for web search keywords
+    const hasWebSearchKeyword = webSearchKeywords.some(
       keyword => lowercaseMessage.includes(keyword)
     );
     
@@ -256,24 +430,20 @@ export class ContextAwareMessageHandler {
       (lowercaseMessage.includes('this') || lowercaseMessage.includes('that') || 
        lowercaseMessage.includes('it') || lowercaseMessage.includes('the'));
     
-    // Conversational patterns that DON'T need tools
+    // Conversational patterns that DON'T need tools (but exclude web search requests)
     const conversationalPatterns = [
-      /^(hi|hello|hey|thanks|thank you|okay|ok|yes|no|good|great|awesome)[\s!.]*$/i,
-      /what (is|are) .* in servicenow/i,
-      /how (do|does) .* work/i,
-      /explain .*/i,
-      /tell me about .*/i
+      /^(hi|hello|hey|thanks|thank you|okay|ok|yes|no|good|great|awesome)[\s!.]*$/i
     ];
     
     const isConversational = conversationalPatterns.some(pattern => pattern.test(message));
     
     // Decision logic
-    if (isConversational && !hasOperationKeyword && !hasRecordReference) {
+    if (isConversational && !hasOperationKeyword && !hasRecordReference && !hasWebSearchKeyword && !hasUrl) {
       return false; // Pure conversational, no tools needed
     }
     
     return hasOperationKeyword || hasRecordReference || hasSysId || 
-           hasRecentToolUse || hasServiceNowContext;
+           hasRecentToolUse || hasServiceNowContext || hasWebSearchKeyword || hasUrl;
   }
   
   private buildLLMMessages(context: ConversationContext, needsTools: boolean): LLMMessage[] {
@@ -355,6 +525,15 @@ export class ContextAwareMessageHandler {
     }
   }
   
+  private getContextLimit(model: string): number {
+    if (model.startsWith('gpt-4o')) return 128000;
+    if (model.startsWith('gpt-4')) return 8000;
+    if (model.startsWith('gpt-3.5')) return 4000;
+    if (model.startsWith('o1-')) return 128000;
+    if (model.startsWith('claude-')) return 200000;
+    return 4000; // default
+  }
+
   cleanup(userId: string): void {
     this.conversationHistory.delete(userId);
     logger.info(`Cleaned up conversation history for user: ${userId}`);

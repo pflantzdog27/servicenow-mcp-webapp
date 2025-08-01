@@ -60,8 +60,23 @@ export class ChatHandler {
   }
 
   async handleMessage(socket: AuthenticatedSocket, data: { message: string; model?: string }): Promise<void> {
-    // Use legacy handler for now while debugging the hanging issue
-    return this.handleMessageLegacy(socket, data);
+    // Try context-aware handler first, fallback to legacy if it fails
+    try {
+      const model = data.model || 'claude-sonnet-4-20250514';
+      const llmService = this.createLLMService(model);
+      const messageId = uuidv4();
+      
+      return await this.contextAwareHandler.processMessage(
+        socket,
+        messageId,
+        data.message,
+        llmService,
+        model
+      );
+    } catch (error) {
+      logger.warn('Context-aware handler failed, falling back to legacy:', error);
+      return this.handleMessageLegacy(socket, data);
+    }
   }
 
   // Legacy method for backward compatibility
@@ -137,7 +152,6 @@ export class ChatHandler {
       const response = await session.llmService.generateResponse(
         llmMessages,
         (chunk) => {
-          logger.info(`Streaming chunk: ${chunk.type} - ${chunk.content?.substring(0, 50)}...`);
           if (chunk.type === 'text') {
             assistantMessage.content += chunk.content;
             socket.emit('chat:stream', {
@@ -202,10 +216,9 @@ export class ChatHandler {
               success: !toolResult.isError
             });
 
-            // Format tool result for display
+            // Format tool result for display (but don't add to content to avoid duplication)
             const resultText = this.formatToolResult(toolCall.name, toolResult);
             if (resultText) {
-              assistantMessage.content += `\n\n${resultText}`;
               socket.emit('chat:stream', {
                 messageId: assistantMessage.id,
                 type: 'tool_result',

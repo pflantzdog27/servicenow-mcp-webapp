@@ -1,7 +1,7 @@
 import React, { useEffect } from 'react';
 import { useParams, useOutletContext } from 'react-router-dom';
 import Sidebar from '../components/Sidebar';
-import EnhancedChatInterface from '../components/EnhancedChatInterface';
+import EnhancedChatInterface from '../components/NewEnhancedChatInterface';
 import ActivityPanel from '../components/ActivityPanel';
 import { Socket } from 'socket.io-client';
 

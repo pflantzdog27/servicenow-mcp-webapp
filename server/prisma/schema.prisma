@@ -1,29 +1,55 @@
-// ServiceNow MCP Web Application Database Schema
+// ServiceNow MCP Web Application Database Schema - PostgreSQL
 
 generator client {
   provider = "prisma-client-js"
 }
 
 datasource db {
-  provider = "sqlite"
+  provider = "postgresql"
   url      = env("DATABASE_URL")
 }
 
 model User {
+  id                String    @id @default(cuid())
+  email             String    @unique
+  name              String?
+  password          String
+  avatar            String?
+  role              Role      @default(USER)
+  isActive          Boolean   @default(true)
+  lastLoginAt       DateTime?
+  failedLoginAttempts Int     @default(0)
+  lockedUntil       DateTime?
+  createdAt         DateTime  @default(now())
+  updatedAt         DateTime  @updatedAt
+
+  // Relations
+  projects          Project[]
+  chatSessions      ChatSession[]
+  apiKeys           ApiKey[]
+  rateLimitRecords  RateLimitRecord[]
+
+  @@index([email])
+  @@map("users")
+}
+
+model ApiKey {
   id        String   @id @default(cuid())
-  email     String   @unique
-  name      String?
-  password  String
-  avatar    String?
-  role      Role     @default(USER)
+  userId    String
+  key       String   @unique
+  name      String
+  lastUsed  DateTime?
+  expiresAt DateTime?
+  isActive  Boolean  @default(true)
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
   // Relations
-  projects     Project[]
-  chatSessions ChatSession[]
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
 
-  @@map("users")
+  @@index([key])
+  @@index([userId])
+  @@map("api_keys")
 }
 
 model Project {
@@ -31,6 +57,7 @@ model Project {
   userId      String
   name        String
   description String?
+  settings    Json?    // Project-specific settings (JSON)
   createdAt   DateTime @default(now())
   updatedAt   DateTime @updatedAt
 
@@ -39,6 +66,7 @@ model Project {
   documents    Document[]
   chatSessions ChatSession[]
 
+  @@index([userId])
   @@map("projects")
 }
 
@@ -53,38 +81,48 @@ model Document {
   chunkCount       Int               @default(0)
   processingStatus ProcessingStatus  @default(UPLOADING)
   errorMessage     String?
+  metadata         Json?             // Additional metadata (JSON)
   createdAt        DateTime          @default(now())
+  updatedAt        DateTime          @updatedAt
 
   // Relations
-  project Project       @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  project Project         @relation(fields: [projectId], references: [id], onDelete: Cascade)
   chunks  DocumentChunk[]
 
+  @@index([projectId])
+  @@index([processingStatus])
   @@map("documents")
 }
 
 model DocumentChunk {
   id         String   @id @default(cuid())
   documentId String
-  content    String
+  content    String   @db.Text
   chunkIndex Int
-  embedding  String?  // JSON string of embedding vector
+  embedding  Float[]  // Native PostgreSQL array for embeddings
+  metadata   Json?    // Chunk-specific metadata
   createdAt  DateTime @default(now())
 
   // Relations
   document Document @relation(fields: [documentId], references: [id], onDelete: Cascade)
 
+  @@unique([documentId, chunkIndex])
+  @@index([documentId])
   @@map("document_chunks")
 }
 
 model ChatSession {
-  id               String   @id @default(cuid())
+  id               String    @id @default(cuid())
   title            String?
   model            String
-  totalTokensUsed  Int      @default(0)
+  totalTokensUsed  Int       @default(0)
   contextLimit     Int
-  projectId        String?  // Optional - can be null for general chats
-  createdAt        DateTime @default(now())
-  updatedAt        DateTime @updatedAt
+  projectId        String?   // Optional - can be null for general chats
+  isActive         Boolean   @default(true)
+  metadata         Json?     // Session metadata (JSON)
+  createdAt        DateTime  @default(now())
+  updatedAt        DateTime  @updatedAt
+  lastMessageAt    DateTime?
 
   // Relations
   userId   String
@@ -92,41 +130,109 @@ model ChatSession {
   project  Project?  @relation(fields: [projectId], references: [id], onDelete: SetNull)
   messages Message[]
 
+  @@index([userId])
+  @@index([projectId])
+  @@index([lastMessageAt])
   @@map("chat_sessions")
 }
 
 model Message {
-  id         String      @id @default(cuid())
-  role       MessageRole
-  content    String
-  tokenCount Int         @default(0)
-  model      String?
-  sources    String?     // JSON array of source citations
-  createdAt  DateTime    @default(now())
+  id              String      @id @default(cuid())
+  role            MessageRole
+  content         String      @db.Text
+  tokenCount      Int         @default(0)
+  model           String?
+  sources         Json?       // JSON array of source citations
+  metadata        Json?       // Additional metadata
+  parentMessageId String?     // For conversation threading
+  createdAt       DateTime    @default(now())
 
   // Relations
-  sessionId      String
-  session        ChatSession     @relation(fields: [sessionId], references: [id], onDelete: Cascade)
-  toolExecutions ToolExecution[]
+  sessionId       String
+  session         ChatSession     @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+  toolExecutions  ToolExecution[]
+  parentMessage   Message?        @relation("MessageReplies", fields: [parentMessageId], references: [id])
+  replies         Message[]       @relation("MessageReplies")
 
+  @@index([sessionId])
+  @@index([createdAt])
   @@map("messages")
 }
 
 model ToolExecution {
-  id        String               @id @default(cuid())
-  toolName  String
-  arguments String // JSON string
-  result    String? // JSON string
-  status    ToolExecutionStatus
-  error     String?
-  createdAt DateTime             @default(now())
-  updatedAt DateTime             @updatedAt
+  id            String               @id @default(cuid())
+  toolName      String
+  arguments     Json                 // JSON object
+  result        Json?                // JSON object
+  status        ToolExecutionStatus
+  error         String?
+  executionTime Int?                 // Execution time in milliseconds
+  retryCount    Int                  @default(0)
+  metadata      Json?                // Additional execution metadata
+  createdAt     DateTime             @default(now())
+  updatedAt     DateTime             @updatedAt
 
   // Relations
   messageId String
   message   Message @relation(fields: [messageId], references: [id], onDelete: Cascade)
 
+  @@index([messageId])
+  @@index([status])
+  @@index([toolName])
   @@map("tool_executions")
+}
+
+model QueuedJob {
+  id          String         @id @default(cuid())
+  queue       String         // Queue name (e.g., 'tool-execution', 'document-processing')
+  payload     Json           // Job payload
+  status      JobStatus      @default(PENDING)
+  priority    Int            @default(0)
+  attempts    Int            @default(0)
+  maxAttempts Int            @default(3)
+  result      Json?
+  error       String?
+  processedAt DateTime?
+  completedAt DateTime?
+  createdAt   DateTime       @default(now())
+  updatedAt   DateTime       @updatedAt
+
+  @@index([queue, status])
+  @@index([priority])
+  @@index([createdAt])
+  @@map("queued_jobs")
+}
+
+model RateLimitRecord {
+  id        String   @id @default(cuid())
+  userId    String?
+  ip        String?
+  endpoint  String
+  count     Int      @default(1)
+  windowStart DateTime
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  // Relations
+  user User? @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, endpoint, windowStart])
+  @@unique([ip, endpoint, windowStart])
+  @@index([windowStart])
+  @@map("rate_limit_records")
+}
+
+model MCPConnection {
+  id            String   @id @default(cuid())
+  connectionId  String   @unique
+  status        ConnectionStatus @default(CONNECTING)
+  lastPingAt    DateTime?
+  metadata      Json?
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  @@index([status])
+  @@map("mcp_connections")
 }
 
 enum Role {
@@ -138,6 +244,7 @@ enum MessageRole {
   USER
   ASSISTANT
   SYSTEM
+  TOOL
 }
 
 enum ToolExecutionStatus {
@@ -145,6 +252,8 @@ enum ToolExecutionStatus {
   EXECUTING
   COMPLETED
   FAILED
+  CANCELLED
+  TIMEOUT
 }
 
 enum ProcessingStatus {
@@ -152,4 +261,19 @@ enum ProcessingStatus {
   PROCESSING
   COMPLETED
   FAILED
+}
+
+enum JobStatus {
+  PENDING
+  PROCESSING
+  COMPLETED
+  FAILED
+  CANCELLED
+}
+
+enum ConnectionStatus {
+  CONNECTING
+  CONNECTED
+  DISCONNECTED
+  ERROR
 }
