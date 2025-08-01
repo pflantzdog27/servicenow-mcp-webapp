@@ -4,6 +4,7 @@ import { MessageSquare, Calendar, Search } from 'lucide-react';
 import { Socket } from 'socket.io-client';
 import chatService, { ChatSession as ChatSessionType } from '../services/chat';
 import { useAuth } from '../contexts/AuthContext';
+import { getModelDisplayName } from '../utils/modelUtils';
 
 interface OutletContext {
   socket: Socket | null;
@@ -48,12 +49,46 @@ function ChatHistoryView() {
   const formatDate = (date: Date) => {
     const now = new Date();
     const diff = now.getTime() - date.getTime();
+    const minutes = Math.floor(diff / (1000 * 60));
+    const hours = Math.floor(diff / (1000 * 60 * 60));
     const days = Math.floor(diff / (1000 * 60 * 60 * 24));
     
-    if (days === 0) return 'Today';
-    if (days === 1) return 'Yesterday';
-    if (days < 7) return `${days} days ago`;
-    return date.toLocaleDateString();
+    const isToday = now.toDateString() === date.toDateString();
+    const isYesterday = days === 1;
+    
+    // Recent (under 1 hour): "5 minutes ago"
+    if (minutes < 60) {
+      if (minutes < 1) return 'Just now';
+      return `${minutes} minutes ago`;
+    }
+    
+    // Today's chats: show time only "2:34 PM"
+    if (isToday) {
+      return date.toLocaleTimeString('en-US', {
+        hour: 'numeric',
+        minute: '2-digit',
+        hour12: true
+      });
+    }
+    
+    // Yesterday: "Yesterday at 2:34 PM"
+    if (isYesterday) {
+      return `Yesterday at ${date.toLocaleTimeString('en-US', {
+        hour: 'numeric',
+        minute: '2-digit',
+        hour12: true
+      })}`;
+    }
+    
+    // Older: "Dec 30 at 2:34 PM"
+    return `${date.toLocaleDateString('en-US', {
+      month: 'short',
+      day: 'numeric'
+    })} at ${date.toLocaleTimeString('en-US', {
+      hour: 'numeric',
+      minute: '2-digit',
+      hour12: true
+    })}`;
   };
 
   return (
@@ -97,9 +132,6 @@ function ChatHistoryView() {
                       {formatDate(session.updatedAt)}
                     </span>
                   </div>
-                  <p className="text-sm text-gray-400 line-clamp-2 mb-2">
-                    {session.model} • Created {formatDate(session.createdAt)}
-                  </p>
                   <div className="flex items-center text-xs text-gray-500">
                     <MessageSquare className="w-3 h-3 mr-1" />
                     {session._count?.messages || 0} messages

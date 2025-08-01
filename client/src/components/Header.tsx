@@ -3,6 +3,7 @@ import { Socket } from 'socket.io-client';
 import { ChevronDown, User, LogOut, Settings, MessageCircle, FolderOpen, History } from 'lucide-react';
 import { useAuth } from '../contexts/AuthContext';
 import { useNavigate, useLocation } from 'react-router-dom';
+import { models, getCleanModelName } from '../utils/modelUtils';
 
 interface HeaderProps {
   selectedModel: string;
@@ -12,13 +13,7 @@ interface HeaderProps {
   onViewChange: (view: 'chat' | 'projects') => void;
 }
 
-// Updated models - only Anthropic options
-const models = [
-  { id: 'claude-opus-4-20250514', name: 'Claude Opus 4', provider: 'Anthropic' },
-  { id: 'claude-sonnet-4-20250514', name: 'Claude Sonnet 4', provider: 'Anthropic' },
-  { id: 'claude-3-7-sonnet-20250219', name: 'Claude Sonnet 3.7', provider: 'Anthropic' },
-  { id: 'claude-3-5-haiku-20241022', name: 'Claude Haiku 3.5', provider: 'Anthropic' },
-];
+// Models are now imported from utils
 
 const Header: React.FC<HeaderProps> = ({ selectedModel, onModelChange, socket, view, onViewChange }) => {
   const { user, logout } = useAuth();
@@ -47,7 +42,7 @@ const Header: React.FC<HeaderProps> = ({ selectedModel, onModelChange, socket, v
         <div className="flex items-center space-x-6">
           <div className="flex flex-col items-start">
             <img 
-              src="/assets/nowdev-logo.png" 
+              src="/assets/nowdev-logo.svg" 
               alt="NOWdev.ai" 
               className="h-8 w-auto mb-1"
             />
@@ -104,7 +99,7 @@ const Header: React.FC<HeaderProps> = ({ selectedModel, onModelChange, socket, v
               >
                 {models.map((model) => (
                   <option key={model.id} value={model.id}>
-                    {model.name} ({model.provider})
+                    {model.name}
                   </option>
                 ))}
               </select>

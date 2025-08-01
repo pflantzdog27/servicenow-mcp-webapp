@@ -7,6 +7,7 @@ import { ResultFormatter } from '../utils/result-formatter';
 import { AuthenticatedSocket } from '../middleware/socketAuth';
 import { createLogger } from '../utils/logger';
 import { PrismaClient, ToolExecutionStatus } from '@prisma/client';
+import { ChatService } from '../services/chat';
 
 const logger = createLogger();
 const prisma = new PrismaClient();
@@ -33,6 +34,7 @@ export class ContextAwareMessageHandler {
   private streamHandler: EnhancedStreamHandler;
   private resultFormatter: ResultFormatter;
   private enhancedToolExecutor: EnhancedToolExecutor;
+  private chatService: ChatService;
   
   constructor(
     private mcpClientManager: MCPClientManager,
@@ -41,6 +43,7 @@ export class ContextAwareMessageHandler {
     this.streamHandler = new EnhancedStreamHandler(mcpClientManager);
     this.resultFormatter = new ResultFormatter(this.instanceUrl);
     this.enhancedToolExecutor = new EnhancedToolExecutor(mcpClientManager);
+    this.chatService = new ChatService();
   }
 
   async processMessage(
@@ -90,6 +93,11 @@ export class ContextAwareMessageHandler {
         timestamp: userDbMessage.createdAt
       };
       context.messages.push(userMessage);
+      
+      // Auto-generate session title from first message if needed
+      if (context.messages.length === 1) {
+        await this.chatService.updateSessionTitle(dbSessionId, userId, '');
+      }
       
       // Analyze message intent
       const needsTools = this.analyzeMessageIntent(message, context);
