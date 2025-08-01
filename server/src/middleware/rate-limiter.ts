@@ -132,11 +132,7 @@ export const apiRateLimiter = rateLimit({
   standardHeaders: true,
   legacyHeaders: false,
   store: new RedisRateLimitStore('api', 60 * 1000),
-  keyGenerator: (req: Request) => {
-    // Use user ID if authenticated, otherwise use IP
-    const authReq = req as any;
-    return authReq.user?.id || req.ip;
-  },
+  // Remove custom key generator to avoid IPv6 issues
 });
 
 // Auth endpoint rate limiter (very strict for security)
@@ -158,10 +154,7 @@ export const toolExecutionRateLimiter = rateLimit({
   standardHeaders: true,
   legacyHeaders: false,
   store: new RedisRateLimitStore('tools', 60 * 1000),
-  keyGenerator: (req: Request) => {
-    const authReq = req as any;
-    return authReq.user?.id || req.ip;
-  },
+  // Remove custom key generator to avoid IPv6 issues
 });
 
 // Custom rate limiter factory

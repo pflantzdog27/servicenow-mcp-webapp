@@ -4,9 +4,26 @@ import { queueToolExecution } from '../queues/tool-execution-queue';
 import { queueMessageProcessing } from '../queues/message-processing-queue';
 import { createLogger } from '../utils/logger';
 import { PrismaClient } from '@prisma/client';
+import { MCPParameterTransformer } from '../mcp/mcp-parameter-transformer';
+import { mcpDebugLogger } from '../utils/mcp-debug-logger';
+import { AnthropicService } from '../llm/anthropic-service';
+import { OpenAIService } from '../llm/openai-service';
+import { LLMService, LLMMessage } from '../llm/llm-interface';
 
 const logger = createLogger();
 const prisma = new PrismaClient();
+
+// Function to create appropriate LLM service based on model
+function createLLMService(model: string): LLMService {
+  if (model.includes('claude')) {
+    return new AnthropicService(model);
+  } else if (model.includes('gpt') || model.includes('o4')) {
+    return new OpenAIService(model);
+  } else {
+    // Default to Claude for unknown models
+    return new AnthropicService('claude-sonnet-4-20250514');
+  }
+}
 
 interface SocketWithUser extends Socket {
   userId: string;
@@ -201,9 +218,37 @@ async function streamEnhancedResponse({
 
     let responseText = '';
 
-    // Phase 1: Execute tools if needed
+    // Phase 1: Execute tools if needed (with dependency handling)
     if (toolsToUse.length > 0) {
+      let catalogItemId = null;
+      
+      // Execute tools in sequence, handling dependencies
       for (const tool of toolsToUse) {
+        // Skip dependent tools if they depend on a tool that hasn't run yet
+        if (tool.dependsOn && !catalogItemId) {
+          continue;
+        }
+        
+        // Update tool arguments with catalog item ID if it's a dependent tool
+        if (tool.dependsOn && catalogItemId && tool.arguments.command) {
+          tool.arguments.command = tool.arguments.command.replace(
+            `for catalog item '${tool.itemName || 'New Catalog Item'}'`,
+            `for catalog item with sys_id '${catalogItemId}'`
+          );
+        }
+        // ===== COMPREHENSIVE DEBUG LOGGING START =====
+        console.log('\n🔧 [TOOL-CALL] Received from LLM:', JSON.stringify(tool, null, 2));
+        console.log('📝 [TOOL-CALL] User Message:', userMessage);
+        console.log('🎯 [TOOL-CALL] Message ID:', messageId);
+        
+        // Log to debug file
+        mcpDebugLogger.logToolCall({
+          messageId,
+          toolName: tool.name,
+          userMessage,
+          originalArguments: tool.arguments
+        });
+        
         // Emit tool start
         socket.emit('chat:tool_start', {
           messageId,
@@ -220,6 +265,12 @@ async function streamEnhancedResponse({
             arguments: tool.arguments
           });
           
+          console.log('🚀 [MCP-START] Tool execution started:', {
+            toolName: tool.name,
+            messageId,
+            timestamp: new Date().toISOString()
+          });
+          
           // Simulate progress
           socket.emit('chat:tool_progress', {
             messageId,
@@ -227,12 +278,74 @@ async function streamEnhancedResponse({
             progress: 25,
           });
 
+          // Transform parameters for MCP tools
+          console.log('🔄 [MCP-TRANSFORM] Before transformation:', JSON.stringify(tool.arguments, null, 2));
+          
+          const transformedArguments = MCPParameterTransformer.transformParameters(
+            tool.name,
+            tool.arguments,
+            userMessage
+          );
+          
+          console.log('✅ [MCP-TRANSFORM] After transformation:', JSON.stringify(transformedArguments, null, 2));
+          
+          // Log parameter transformation to debug file
+          mcpDebugLogger.logParameterTransformation({
+            toolName: tool.name,
+            originalArgs: tool.arguments,
+            transformedArgs: transformedArguments,
+            userMessage
+          });
+          
+          logger.info(`[MCP] Tool arguments after transformation:`, {
+            toolName: tool.name,
+            originalArguments: tool.arguments,
+            transformedArguments
+          });
+          
+          console.log('📤 [MCP-EXECUTE] About to call MCP server with:', {
+            toolName: tool.name,
+            transformedArguments: transformedArguments,
+            mcpClientReady: mcpClient.isReady(),
+            poolStats: mcpClient.getPoolStats()
+          });
+          
+          // Log MCP execution to debug file
+          mcpDebugLogger.logMCPExecution({
+            toolName: tool.name,
+            arguments: transformedArguments,
+            mcpClientReady: mcpClient.isReady(),
+            poolStats: mcpClient.getPoolStats()
+          });
+          
           const startTime = Date.now();
+          
+          console.log('⏱️ [MCP-EXECUTE] Calling MCP server now...');
+          
           const toolResult = await mcpClient.executeTool({
             name: tool.name,
-            arguments: tool.arguments,
+            arguments: transformedArguments,
           }, assistantMessageId);
+          
           const executionTime = Date.now() - startTime;
+
+          console.log('📥 [MCP-RESPONSE] Raw result from MCP server:', JSON.stringify(toolResult, null, 2));
+          console.log('⏱️ [MCP-TIMING] Execution took:', executionTime, 'ms');
+          
+          // Log MCP response to debug file
+          mcpDebugLogger.logMCPResponse({
+            toolName: tool.name,
+            result: toolResult,
+            executionTime,
+            isError: !!toolResult.isError
+          });
+          
+          // Check for errors in the result
+          if (toolResult.isError) {
+            console.error('❌ [MCP-ERROR] Tool execution failed:', toolResult.content);
+          } else {
+            console.log('✅ [MCP-SUCCESS] Tool executed successfully');
+          }
 
           logger.info(`[MCP] Tool execution completed: ${tool.name}`, {
             messageId,
@@ -273,6 +386,15 @@ async function streamEnhancedResponse({
                 }
               } catch (e) {
                 resultText = textContent.text;
+                
+                // Extract catalog item ID from ServiceNow response format
+                if (tool.name.includes('create-catalog-item') && textContent.text.includes('Item ID:')) {
+                  const idMatch = textContent.text.match(/Item ID:\s*([a-f0-9]{32})/i);
+                  if (idMatch) {
+                    catalogItemId = idMatch[1];
+                    console.log('🎯 [CATALOG-ID] Extracted catalog item ID:', catalogItemId);
+                  }
+                }
               }
             }
           }
@@ -284,6 +406,23 @@ async function streamEnhancedResponse({
           tool.result = toolResult;
 
         } catch (error) {
+          console.error('💥 [MCP-ERROR] Tool execution threw exception:', {
+            toolName: tool.name,
+            error: error,
+            errorMessage: String(error),
+            errorStack: error instanceof Error ? error.stack : 'No stack trace',
+            messageId
+          });
+          
+          // Log error to debug file
+          mcpDebugLogger.logError({
+            toolName: tool.name,
+            error: error,
+            errorMessage: String(error),
+            errorStack: error instanceof Error ? error.stack : undefined,
+            messageId
+          });
+          
           logger.error(`Tool execution failed: ${tool.name}`, error);
           
           socket.emit('chat:tool_error', {
@@ -291,29 +430,252 @@ async function streamEnhancedResponse({
             toolName: tool.name,
             error: String(error),
           });
+          
+          // Add error to response context
+          responseText += `I encountered an error while executing ${tool.name}: ${String(error)}. `;
+        }
+        
+        console.log('🏁 [MCP-COMPLETE] Tool processing finished for:', tool.name);
+        console.log('=' .repeat(80));
+      }
+      
+      // Second pass: Execute dependent tools now that we have the catalog item ID
+      if (catalogItemId) {
+        const dependentTools = toolsToUse.filter(tool => tool.dependsOn);
+        console.log(`🔗 [DEPENDENT-TOOLS] Found ${dependentTools.length} dependent tools to execute`);
+        
+        for (const tool of dependentTools) {
+          // Update tool arguments with catalog item ID
+          if (tool.arguments.catalog_item === 'PLACEHOLDER_CATALOG_ID') {
+            tool.arguments.catalog_item = catalogItemId;
+            console.log(`🔄 [DEPENDENT-TOOL] Updated catalog_item parameter:`, {
+              toolName: tool.name,
+              catalogItemId: catalogItemId
+            });
+          }
+          
+          // Also update command-based tools (like UI policy)
+          if (tool.arguments.command && tool.arguments.command.includes('PLACEHOLDER_CATALOG_ID')) {
+            const originalCommand = tool.arguments.command;
+            tool.arguments.command = tool.arguments.command.replace(
+              'PLACEHOLDER_CATALOG_ID',
+              catalogItemId
+            );
+            console.log(`🔄 [DEPENDENT-TOOL] Updated command:`, {
+              original: originalCommand,
+              updated: tool.arguments.command
+            });
+          }
+          
+          // Execute the dependent tool (reuse the same execution logic)
+          console.log('\n🔧 [DEPENDENT-TOOL-CALL] Executing dependent tool:', JSON.stringify(tool, null, 2));
+          
+          socket.emit('chat:tool_start', {
+            messageId,
+            toolName: tool.name,
+            arguments: tool.arguments,
+          });
+
+          try {
+            const mcpClient = getEnhancedMCPClient();
+            const transformedArguments = MCPParameterTransformer.transformParameters(
+              tool.name,
+              tool.arguments,
+              userMessage
+            );
+            
+            const toolResult = await mcpClient.executeTool({
+              name: tool.name,
+              arguments: transformedArguments,
+            }, assistantMessageId);
+            
+            socket.emit('chat:tool_complete', {
+              messageId,
+              toolName: tool.name,
+              result: toolResult,
+            });
+            
+            // Add to response context
+            const resultText = toolResult.content?.[0]?.text || `Executed ${tool.name} successfully`;
+            responseText += `${resultText}. `;
+            tool.result = toolResult;
+            
+            console.log('✅ [DEPENDENT-TOOL] Successfully executed:', tool.name);
+            
+          } catch (error) {
+            console.error('❌ [DEPENDENT-TOOL-ERROR] Failed to execute dependent tool:', error);
+            socket.emit('chat:tool_error', {
+              messageId,
+              toolName: tool.name,
+              error: String(error),
+            });
+          }
         }
       }
     }
 
-    // Phase 2: Stream text response
-    const fullResponse = generateResponse(userMessage, toolsToUse, responseText);
+    // Phase 2: Generate LLM response with tool results
+    console.log('🤖 [LLM-START] Generating response with tool results...');
     
-    // Stream response word by word
-    const words = fullResponse.split(' ');
-    let currentResponse = '';
-
-    for (let i = 0; i < words.length; i++) {
-      const word = words[i];
-      const chunk = i === 0 ? word : ` ${word}`;
-      currentResponse += chunk;
-
-      socket.emit('chat:text_stream', {
-        messageId,
-        chunk,
+    // Create LLM service
+    const llmService = createLLMService(model);
+    
+    // Don't set tools for response generation - we're just asking for a conversational response
+    llmService.setAvailableTools({
+      mcp: [],
+      web: []
+    });
+    
+    // Build conversation messages for natural response generation
+    const conversationMessages: LLMMessage[] = [];
+    
+    if (toolsToUse.length > 0) {
+      // Create a natural conversation context about what was accomplished
+      let contextMessage = `The user requested: "${userMessage}"\n\n`;
+      
+      // Count what we actually accomplished
+      const catalogItems = toolsToUse.filter(t => t.name.includes('create-catalog-item') && t.result);
+      const variables = toolsToUse.filter(t => t.name.includes('create-variable') && t.result);
+      const uiPolicies = toolsToUse.filter(t => t.name.includes('create-ui-policy') && t.result);
+      
+      contextMessage += `I successfully completed the following ServiceNow operations:\n\n`;
+      
+      if (catalogItems.length > 0) {
+        const catalogResult = catalogItems[0].result.content?.[0]?.text || '';
+        const itemIdMatch = catalogResult.match(/Item ID:\s*([a-f0-9]{32})/i);
+        const itemId = itemIdMatch ? itemIdMatch[1] : 'unknown';
+        contextMessage += `✅ Created catalog item "${catalogItems[0].itemName || 'Test Item'}" (ID: ${itemId})\n`;
+      }
+      
+      if (variables.length > 0) {
+        contextMessage += `✅ Added ${variables.length} variables:\n`;
+        variables.forEach(v => {
+          const name = v.arguments.question_text || v.arguments.name;
+          const type = v.arguments.type;
+          contextMessage += `   • ${name} (${type})\n`;
+        });
+      }
+      
+      if (uiPolicies.length > 0) {
+        contextMessage += `✅ Created UI policy for dynamic field behavior\n`;
+      }
+      
+      contextMessage += '\nPlease respond as a helpful ServiceNow assistant. Be conversational and encouraging. ';
+      contextMessage += 'Explain what was created in plain English, mention specific details like the catalog item ID, ';
+      contextMessage += 'and describe what users will see when they access this catalog item. ';
+      contextMessage += 'If everything requested was completed, celebrate the success! ';
+      contextMessage += 'If only part was done, acknowledge what worked and suggest what could be added next.';
+      
+      conversationMessages.push({
+        role: 'user',
+        content: contextMessage
       });
-
-      // Simulate typing delay
-      await new Promise(resolve => setTimeout(resolve, 50 + Math.random() * 50));
+    } else {
+      // No tools were executed, just respond to the user naturally
+      conversationMessages.push({
+        role: 'user',
+        content: userMessage
+      });
+    }
+    
+    console.log('📝 [LLM-CONTEXT] Conversation messages:', JSON.stringify(conversationMessages, null, 2));
+    
+    // Generate streaming response from LLM
+    let currentResponse = '';
+    
+    try {
+      const llmResponse = await llmService.generateResponse(
+        conversationMessages,
+        (chunk) => {
+          if (chunk.type === 'text' && chunk.content) {
+            currentResponse += chunk.content;
+            socket.emit('chat:text_stream', {
+              messageId,
+              chunk: chunk.content,
+            });
+          }
+        }
+      );
+      
+      // If no streaming occurred, send the full response
+      if (!currentResponse && llmResponse.message) {
+        currentResponse = llmResponse.message;
+        const words = currentResponse.split(' ');
+        
+        for (let i = 0; i < words.length; i++) {
+          const word = words[i];
+          const chunk = i === 0 ? word : ` ${word}`;
+          
+          socket.emit('chat:text_stream', {
+            messageId,
+            chunk,
+          });
+          
+          // Simulate typing delay
+          await new Promise(resolve => setTimeout(resolve, 50 + Math.random() * 50));
+        }
+      }
+      
+      console.log('✅ [LLM-SUCCESS] Generated response:', currentResponse.substring(0, 200) + '...');
+      
+    } catch (error) {
+      console.error('❌ [LLM-ERROR] Failed to generate response:', error);
+      logger.error('LLM response generation failed:', error);
+      
+      // Create a helpful fallback response based on what was actually accomplished
+      let fallbackResponse = '';
+      
+      if (toolsToUse.length > 0) {
+        // We executed tools, so explain what happened
+        const catalogItems = toolsToUse.filter(t => t.name.includes('create-catalog-item') && t.result);
+        const variables = toolsToUse.filter(t => t.name.includes('create-variable') && t.result);
+        
+        if (catalogItems.length > 0) {
+          const catalogResult = catalogItems[0].result.content?.[0]?.text || '';
+          const itemIdMatch = catalogResult.match(/Item ID:\s*([a-f0-9]{32})/i);
+          const itemName = catalogItems[0].itemName || 'Test Item';
+          
+          fallbackResponse = `Great! I've successfully created the "${itemName}" catalog item in ServiceNow. `;
+          
+          if (itemIdMatch) {
+            fallbackResponse += `The item ID is ${itemIdMatch[1]}. `;
+          }
+          
+          if (variables.length > 0) {
+            fallbackResponse += `I also added ${variables.length} variables to make the form more useful: `;
+            variables.forEach((v, index) => {
+              const fieldName = v.arguments.question_text || v.arguments.name;
+              fallbackResponse += index === variables.length - 1 ? `and ${fieldName}. ` : `${fieldName}, `;
+            });
+          }
+          
+          fallbackResponse += `Users can now find this item in the ServiceNow catalog and submit requests with the custom fields I created. Is there anything else you'd like me to add or modify?`;
+        } else {
+          fallbackResponse = generateResponse(userMessage, toolsToUse, responseText);
+        }
+      } else {
+        // No tools executed, just respond naturally to the question
+        if (userMessage.toLowerCase().includes('connected') || userMessage.toLowerCase().includes('servicenow')) {
+          fallbackResponse = `Yes, I'm connected to ServiceNow and ready to help! I can create catalog items, incidents, variables, UI policies, and many other ServiceNow objects. What would you like me to help you with?`;
+        } else {
+          fallbackResponse = generateResponse(userMessage, toolsToUse, responseText);
+        }
+      }
+      
+      currentResponse = fallbackResponse;
+      const words = currentResponse.split(' ');
+      
+      for (let i = 0; i < words.length; i++) {
+        const word = words[i];
+        const chunk = i === 0 ? word : ` ${word}`;
+        
+        socket.emit('chat:text_stream', {
+          messageId,
+          chunk,
+        });
+        
+        await new Promise(resolve => setTimeout(resolve, 50 + Math.random() * 50));
+      }
     }
 
     // Update database with final response
@@ -358,16 +720,102 @@ function getContextLimit(model: string): number {
 }
 
 function selectToolsForMessage(message: string, availableTools: any[]): any[] {
-  // Simple tool selection logic based on message content
   const toolsToUse = [];
+  const messageLower = message.toLowerCase();
   
-  if (message.toLowerCase().includes('create') || message.toLowerCase().includes('incident')) {
-    const createTool = availableTools.find(t => t.name.includes('create'));
-    if (createTool) {
+  logger.info('[TOOL-SELECTION] Analyzing message for tool selection:', { message });
+  
+  // Catalog item creation (with potential multi-step workflow)
+  if (messageLower.includes('catalog item') || 
+      (messageLower.includes('create') && messageLower.includes('catalog'))) {
+    const catalogTool = availableTools.find(t => t.name === 'servicenow-mcp:create-catalog-item');
+    if (catalogTool) {
+      logger.info('[TOOL-SELECTION] Selected catalog item creation tool');
+      
+      // Extract the catalog item name from the message
+      const itemName = MCPParameterTransformer.extractCatalogItemName(message) || 'New Catalog Item';
+      const category = message.match(/in\s+([^\s]+)\s*$/i)?.[1] || 'General';
+      
       toolsToUse.push({
-        name: createTool.name,
+        name: catalogTool.name,
         arguments: {
-          short_description: 'User requested incident',
+          command: `Create a catalog item called '${itemName}' in ${category}`
+        },
+        itemName: itemName, // Store for use in subsequent tools
+      });
+      
+      // Check if user also wants variables
+      if (messageLower.includes('variable') || messageLower.includes('field') || 
+          messageLower.includes('different types') || messageLower.includes('add')) {
+        logger.info('[TOOL-SELECTION] User requested variables - will add after catalog item creation');
+        
+        // Add multiple variable creation tools with proper parameters
+        const variableTools = [
+          {
+            name: 'servicenow-mcp:create-variable',
+            arguments: {
+              name: 'requestor_name',
+              question_text: 'Full Name',
+              type: 'string',
+              mandatory: true,
+              max_length: 100,
+              catalog_item: 'PLACEHOLDER_CATALOG_ID' // Will be replaced with actual sys_id
+            },
+            dependsOn: 'servicenow-mcp:create-catalog-item'
+          },
+          {
+            name: 'servicenow-mcp:create-variable', 
+            arguments: {
+              name: 'priority_level',
+              question_text: 'Priority Level',
+              type: 'choice',
+              choices: 'Low,Medium,High',
+              default_value: 'Medium',
+              catalog_item: 'PLACEHOLDER_CATALOG_ID'
+            },
+            dependsOn: 'servicenow-mcp:create-catalog-item'
+          },
+          {
+            name: 'servicenow-mcp:create-variable',
+            arguments: {
+              name: 'quantity_requested',
+              question_text: 'Quantity Requested',
+              type: 'integer',
+              default_value: '1',
+              catalog_item: 'PLACEHOLDER_CATALOG_ID'
+            },
+            dependsOn: 'servicenow-mcp:create-catalog-item'
+          }
+        ];
+        
+        toolsToUse.push(...variableTools);
+      }
+      
+      // Check if user also wants UI policy
+      if (messageLower.includes('ui policy') || messageLower.includes('policy')) {
+        logger.info('[TOOL-SELECTION] User requested UI policy - will add after catalog item creation');
+        
+        toolsToUse.push({
+          name: 'servicenow-mcp:create-ui-policy',
+          arguments: {
+            command: `Create a UI policy for catalog item with sys_id 'PLACEHOLDER_CATALOG_ID' that shows quantity field only when priority is High`
+          },
+          dependsOn: 'servicenow-mcp:create-catalog-item'
+        });
+      }
+    }
+  }
+  
+  // Incident creation
+  else if (messageLower.includes('incident') && 
+           (messageLower.includes('create') || messageLower.includes('new'))) {
+    const incidentTool = availableTools.find(t => t.name === 'servicenow-mcp:create-incident');
+    if (incidentTool) {
+      logger.info('[TOOL-SELECTION] Selected incident creation tool');
+      toolsToUse.push({
+        name: incidentTool.name,
+        arguments: {
+          short_description: message.substring(0, 80), // First 80 chars as summary
           description: message,
           urgency: '3',
           impact: '3',
@@ -375,20 +823,34 @@ function selectToolsForMessage(message: string, availableTools: any[]): any[] {
       });
     }
   }
-
-  if (message.toLowerCase().includes('search') || message.toLowerCase().includes('find')) {
-    const searchTool = availableTools.find(t => t.name.includes('search') || t.name.includes('list'));
-    if (searchTool) {
+  
+  // Record search/query
+  else if (messageLower.includes('search') || messageLower.includes('find') || 
+           messageLower.includes('list') || messageLower.includes('show')) {
+    const queryTool = availableTools.find(t => t.name === 'servicenow-mcp:query-records');
+    if (queryTool) {
+      logger.info('[TOOL-SELECTION] Selected query tool');
+      
+      // Determine table based on context
+      let table = 'incident'; // default
+      if (messageLower.includes('catalog')) table = 'sc_cat_item';
+      else if (messageLower.includes('user')) table = 'sys_user';
+      else if (messageLower.includes('group')) table = 'sys_user_group';
+      
       toolsToUse.push({
-        name: searchTool.name,
+        name: queryTool.name,
         arguments: {
-          sysparm_query: `short_descriptionLIKE${message}`,
+          table: table,
           sysparm_limit: '10',
         },
       });
     }
   }
-
+  
+  logger.info(`[TOOL-SELECTION] Selected ${toolsToUse.length} tools:`, 
+    toolsToUse.map(t => ({ name: t.name, arguments: t.arguments }))
+  );
+  
   return toolsToUse.slice(0, 3); // Limit to 3 tools max
 }
 

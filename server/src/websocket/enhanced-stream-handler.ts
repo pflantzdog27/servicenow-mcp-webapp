@@ -285,3 +285,23 @@ export class EnhancedStreamHandler {
     }
   }
 }
+
+// Export the setup function for the stream handlers
+export function setupEnhancedStreamHandlers(socket: AuthenticatedSocket): void {
+  const streamHandler = new EnhancedStreamHandler();
+  
+  // Set up stream handling events
+  socket.on('stream:start', (data) => {
+    streamHandler.handleStreamStart(socket, data);
+  });
+  
+  socket.on('stream:chunk', (data) => {
+    streamHandler.handleStreamChunk(socket, data);
+  });
+  
+  socket.on('stream:end', (data) => {
+    streamHandler.handleStreamEnd(socket, data);
+  });
+  
+  logger.info(`Enhanced stream handlers set up for user ${socket.userId}`);
+}

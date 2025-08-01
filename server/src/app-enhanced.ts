@@ -5,7 +5,7 @@ import { Server } from 'socket.io';
 import dotenv from 'dotenv';
 import { PrismaClient } from '@prisma/client';
 import session from 'express-session';
-import connectRedis from 'connect-redis';
+import ConnectRedis from 'connect-redis';
 import IORedis from 'ioredis';
 
 // Import middleware
@@ -28,6 +28,7 @@ import chatRoutes from './routes/chats';
 import projectRoutes from './routes/projects';
 import activityRoutes from './routes/activity';
 import documentRoutes from './routes/documents';
+import testMcpDirectRoutes from './routes/test-mcp-direct';
 
 // Import WebSocket handlers
 import { setupEnhancedChatHandlers } from './websocket/enhanced-chat-handler';
@@ -41,17 +42,33 @@ const prisma = new PrismaClient();
 const app = express();
 const server = createServer(app);
 
-// Redis client for session store
-const redisClient = new IORedis({
-  host: process.env.REDIS_HOST || 'localhost',
-  port: parseInt(process.env.REDIS_PORT || '6379'),
-  password: process.env.REDIS_PASSWORD,
-});
+// Redis client for session store (with error handling)
+let redisClient: IORedis | null = null;
+try {
+  redisClient = new IORedis({
+    host: process.env.REDIS_HOST || 'localhost',
+    port: parseInt(process.env.REDIS_PORT || '6379'),
+    password: process.env.REDIS_PASSWORD,
+    lazyConnect: true, // Don't connect immediately
+    retryDelayOnFailover: 100,
+    maxRetriesPerRequest: 3,
+  });
+} catch (error) {
+  logger.warn('Redis connection failed, will use memory store:', error);
+}
 
-// Configure session store
-const RedisStore = connectRedis(session);
+// Configure session store with fallback to memory store
+let sessionStore: any = undefined;
+if (redisClient) {
+  try {
+    const RedisStore = ConnectRedis(session);
+    sessionStore = new RedisStore({ client: redisClient });
+  } catch (error) {
+    logger.warn('Redis session store failed, using memory store:', error);
+  }
+}
 const sessionMiddleware = session({
-  store: new RedisStore({ client: redisClient }),
+  store: sessionStore, // Use Redis store if available, otherwise defaults to memory store
   secret: process.env.SESSION_SECRET || 'your-session-secret',
   resave: false,
   saveUninitialized: false,
@@ -65,7 +82,11 @@ const sessionMiddleware = session({
 // Configure Socket.IO with authentication
 const io = new Server(server, {
   cors: {
-    origin: process.env.CORS_ORIGIN || 'http://localhost:5173',
+    origin: [
+      'http://localhost:3000',
+      'http://localhost:5173',
+      process.env.CORS_ORIGIN
+    ].filter(Boolean),
     credentials: true,
   },
   transports: ['websocket', 'polling'],
@@ -73,7 +94,11 @@ const io = new Server(server, {
 
 // Middleware
 app.use(cors({
-  origin: process.env.CORS_ORIGIN || 'http://localhost:5173',
+  origin: [
+    'http://localhost:3000',
+    'http://localhost:5173', 
+    process.env.CORS_ORIGIN
+  ].filter(Boolean),
   credentials: true,
 }));
 app.use(express.json({ limit: '10mb' }));
@@ -90,8 +115,16 @@ app.get('/health', async (req, res) => {
     // Check database connection
     await prisma.$queryRaw`SELECT 1`;
     
-    // Check Redis connection
-    await redisClient.ping();
+    // Check Redis connection (if available)
+    let redisStatus = 'not configured';
+    if (redisClient) {
+      try {
+        await redisClient.ping();
+        redisStatus = 'connected';
+      } catch (redisError) {
+        redisStatus = 'disconnected';
+      }
+    }
     
     // Check MCP client
     const mcpClient = getEnhancedMCPClient();
@@ -103,7 +136,7 @@ app.get('/health', async (req, res) => {
       timestamp: new Date().toISOString(),
       services: {
         database: 'connected',
-        redis: 'connected',
+        redis: redisStatus,
         mcp: mcpReady ? 'ready' : 'not ready',
         mcpPool: poolStats,
       },
@@ -123,6 +156,9 @@ app.use('/api/chats', authenticate, apiRateLimiter, chatRoutes);
 app.use('/api/projects', authenticate, apiRateLimiter, projectRoutes);
 app.use('/api/activity', authenticate, apiRateLimiter, activityRoutes);
 app.use('/api/documents', authenticate, apiRateLimiter, documentRoutes);
+
+// Test routes (no auth required for debugging)
+app.use('/api/test', testMcpDirectRoutes);
 
 // Admin routes (require ADMIN role)
 app.get('/api/admin/stats', authenticate, authorize('ADMIN'), async (req, res) => {

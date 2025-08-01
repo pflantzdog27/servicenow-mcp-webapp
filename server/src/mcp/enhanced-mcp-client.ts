@@ -52,7 +52,7 @@ export class EnhancedMCPClient {
       const response = await connection.client.listTools();
 
       this.availableTools = response.tools.map(tool => ({
-        name: tool.name,
+        name: `servicenow-mcp:${tool.name}`, // Add the prefix expected by the LLM
         description: tool.description,
         inputSchema: tool.inputSchema
       }));
@@ -103,13 +103,26 @@ export class EnhancedMCPClient {
         messageId
       });
       
+      // Handle tool name translation - remove the servicenow-mcp: prefix for the actual MCP call
+      const actualToolName = toolCall.name.replace('servicenow-mcp:', '');
+      
       logger.debug(`[MCP-CLIENT] Sending to MCP server:`, {
         method: 'callTool',
-        params: { name: toolCall.name, arguments: toolCall.arguments }
+        originalToolName: toolCall.name,
+        actualToolName: actualToolName,
+        params: { name: actualToolName, arguments: toolCall.arguments }
+      });
+      
+      // Log the exact parameters being sent
+      logger.info(`[MCP-CLIENT] Calling tool with exact parameters:`, {
+        originalToolName: toolCall.name,
+        actualToolName: actualToolName,
+        argumentKeys: Object.keys(toolCall.arguments),
+        argumentValues: toolCall.arguments
       });
       
       const response = await connection.client.callTool({
-        name: toolCall.name,
+        name: actualToolName,
         arguments: toolCall.arguments
       });
 
@@ -144,7 +157,26 @@ export class EnhancedMCPClient {
       return result;
     } catch (error) {
       const executionTime = Date.now() - startTime;
-      logger.error(`MCP tool ${toolCall.name} failed after ${executionTime}ms:`, error);
+      
+      // Extract detailed error information
+      const errorDetails = {
+        message: String(error),
+        toolName: toolCall.name,
+        arguments: toolCall.arguments,
+        executionTime
+      };
+      
+      // Check for specific MCP error patterns
+      if (String(error).includes('Could not extract catalog item name')) {
+        logger.error(`[MCP-CLIENT] Catalog item parameter format error:`, {
+          ...errorDetails,
+          suggestion: 'Check that command parameter includes "called" and quoted item name'
+        });
+      } else if (String(error).includes('Required parameter')) {
+        logger.error(`[MCP-CLIENT] Missing required parameter:`, errorDetails);
+      } else {
+        logger.error(`[MCP-CLIENT] Tool execution failed:`, errorDetails);
+      }
       
       // Update tool execution record with error
       if (toolExecutionId) {
@@ -153,7 +185,7 @@ export class EnhancedMCPClient {
           data: {
             status: 'FAILED',
             executionTime,
-            error: String(error)
+            error: JSON.stringify(errorDetails)
           }
         });
       }

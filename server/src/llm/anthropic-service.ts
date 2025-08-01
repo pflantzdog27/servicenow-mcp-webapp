@@ -53,12 +53,17 @@ export class AnthropicService extends LLMService {
       // Format tools for Claude's native tool calling
       const allTools = [...this.availableTools.mcp, ...this.availableTools.web];
       const tools = allTools.length > 0 ? allTools.map(tool => ({
-        name: tool.name,
+        name: tool.name.replace('servicenow-mcp:', ''), // Strip prefix for Anthropic API compatibility
         description: tool.description || 'No description available',
         input_schema: tool.inputSchema
       })) : undefined;
+      
+      logger.info(`[ANTHROPIC] Prepared ${allTools.length} tools for API call:`, {
+        toolNames: allTools.map(t => t.name),
+        willSendTools: !!tools
+      });
 
-      const stream = await this.client.messages.create({
+      const requestParams: any = {
         model: this.model,
         max_tokens: 4096,
         temperature: 0.7,
@@ -67,9 +72,18 @@ export class AnthropicService extends LLMService {
           role: msg.role as 'user' | 'assistant',
           content: msg.content
         })),
-        tools: tools,
         stream: true,
-      });
+      };
+      
+      // Only add tools if we actually have some
+      if (tools && tools.length > 0) {
+        requestParams.tools = tools;
+        logger.info(`[ANTHROPIC] Adding ${tools.length} tools to request`);
+      } else {
+        logger.info(`[ANTHROPIC] No tools to add to request`);
+      }
+
+      const stream = await this.client.messages.create(requestParams);
 
       let fullContent = '';
       let usage = { promptTokens: 0, completionTokens: 0, totalTokens: 0 };
@@ -86,8 +100,12 @@ export class AnthropicService extends LLMService {
 
         // Handle Claude's native tool calls
         if (chunk.type === 'content_block_start' && chunk.content_block.type === 'tool_use') {
+          // Map stripped tool name back to full name for MCP execution
+          const strippedName = chunk.content_block.name;
+          const fullName = allTools.find(tool => tool.name.replace('servicenow-mcp:', '') === strippedName)?.name || strippedName;
+          
           const toolCall: MCPToolCall = {
-            name: chunk.content_block.name,
+            name: fullName,
             arguments: chunk.content_block.input || {}
           };
           toolCalls.push(toolCall);
