@@ -9,6 +9,7 @@ import { mcpDebugLogger } from '../utils/mcp-debug-logger';
 import { AnthropicService } from '../llm/anthropic-service';
 import { OpenAIService } from '../llm/openai-service';
 import { LLMService, LLMMessage } from '../llm/llm-interface';
+import { EnhancedChatHandlerWithApproval } from './enhanced-chat-handler-with-approval';
 
 const logger = createLogger();
 const prisma = new PrismaClient();
@@ -45,150 +46,97 @@ interface ToolRetryRequest {
   messageId: string;
 }
 
-export function setupEnhancedChatHandlers(io: Server, socket: SocketWithUser) {
-  const userId = socket.userId;
+// Adapter to make Enhanced MCP Client work with the handler that expects MCPClientManager
+class MCPClientAdapter {
+  private enhancedClient: any;
   
-  // Handle new chat messages with enhanced streaming
+  constructor(enhancedClient: any) {
+    this.enhancedClient = enhancedClient;
+  }
+  
+  async initialize() {
+    return this.enhancedClient.initialize();
+  }
+  
+  async disconnect() {
+    return this.enhancedClient.disconnect();
+  }
+  
+  getAvailableTools() {
+    return this.enhancedClient.getAvailableTools();
+  }
+  
+  async executeTool(toolCall: any, messageId?: string) {
+    return this.enhancedClient.executeTool(toolCall, messageId);
+  }
+  
+  isConnected() {
+    return this.enhancedClient.isReady();
+  }
+}
+
+export function setupEnhancedChatHandlers(io: Server, socket: SocketWithUser) {
+  console.log('🔧 [ENHANCED-HANDLER-SETUP] Setting up enhanced chat handlers');
+  
+  // Create adapter to bridge enhanced MCP client to MCPClientManager interface
+  const enhancedMcpClient = getEnhancedMCPClient();
+  const mcpClientAdapter = new MCPClientAdapter(enhancedMcpClient);
+  
+  // Create the enhanced chat handler with approval that has proper tool discovery
+  const enhancedHandler = new EnhancedChatHandlerWithApproval(mcpClientAdapter as any);
+  
+  console.log('🔧 [ENHANCED-HANDLER-SETUP] Created EnhancedChatHandlerWithApproval instance');
+  
+  // Handle chat messages using the enhanced handler
   socket.on('chat:message', async (data: ChatMessage) => {
-    let messageId: string | null = null;
+    console.log('🚨 [ENHANCED-HANDLER] Received chat:message event');
+    console.log('🚨 [ENHANCED-HANDLER] About to call enhanced handler with approval...');
     
     try {
-      logger.info(`Processing chat message from user ${userId}`, {
-        model: data.model,
-        sessionId: data.sessionId
-      });
-
-      // Generate unique message ID
-      messageId = `msg-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
+      // Convert socket format to match what the handler expects
+      const socketWithUser = socket as any;
+      socketWithUser.user = {
+        userId: socket.userId,
+        email: socket.userEmail,
+        role: socket.userRole
+      };
       
-      // Emit stream start
-      socket.emit('chat:stream_start', { messageId });
-
-      // Emit thinking state
-      socket.emit('chat:thinking', { messageId });
-
-      // Get or create chat session
-      let sessionId = data.sessionId;
-      if (!sessionId) {
-        const session = await prisma.chatSession.create({
-          data: {
-            userId,
-            model: data.model,
-            contextLimit: getContextLimit(data.model),
-          },
-        });
-        sessionId = session.id;
-      }
-
-      // Create user message
-      const userMessage = await prisma.message.create({
-        data: {
-          sessionId,
-          role: 'USER',
-          content: data.message,
-          model: data.model,
-        },
-      });
-
-      // Create assistant message placeholder
-      const assistantMessage = await prisma.message.create({
-        data: {
-          sessionId,
-          role: 'ASSISTANT',
-          content: '',
-          model: data.model,
-        },
-      });
-
-      // Get MCP client and available tools
-      const mcpClient = getEnhancedMCPClient();
-      const availableTools = mcpClient.getAvailableTools();
-
-      // Simulate AI planning phase
-      await new Promise(resolve => setTimeout(resolve, 500));
-
-      // Start streaming response
-      await streamEnhancedResponse({
-        io,
-        socket,
-        messageId,
-        userMessage: data.message,
-        sessionId,
-        assistantMessageId: assistantMessage.id,
-        model: data.model,
-        availableTools,
-      });
-
+      await enhancedHandler.handleMessage(socketWithUser, data);
+      console.log('🚨 [ENHANCED-HANDLER] Enhanced handler completed successfully!');
     } catch (error) {
-      logger.error('Error processing chat message:', error);
-      
-      socket.emit('chat:error', {
-        message: 'Failed to process your message',
-        error: String(error),
-        messageId,
-      });
+      console.error('🚨 [ENHANCED-HANDLER] Enhanced handler FAILED:', error);
+      logger.error('Enhanced handler failed:', error);
+      socket.emit('error', { message: 'Failed to process message' });
     }
   });
 
-  // Handle tool retry requests
-  socket.on('chat:retry_tool', async (data: ToolRetryRequest) => {
+  // Handle tool approval responses using the enhanced handler
+  socket.on('tool:approval_response', async (data) => {
+    console.log('🔧 [ENHANCED-HANDLER] Received tool:approval_response event');
+    
     try {
-      logger.info(`Retrying tool execution for user ${userId}`, {
-        toolName: data.toolCall.name,
-        messageId: data.messageId,
-      });
-
-      // Queue tool for retry
-      await queueToolExecution({
-        toolName: data.toolCall.name,
-        arguments: data.toolCall.arguments,
-        messageId: data.messageId,
-        sessionId: 'retry', // Special session for retries
-        userId,
-        priority: 1, // High priority for retries
-      });
-
-      // Emit tool start event
-      socket.emit('chat:tool_start', {
-        messageId: data.messageId,
-        toolName: data.toolCall.name,
-        arguments: data.toolCall.arguments,
-      });
-
-    } catch (error) {
-      logger.error('Error retrying tool:', error);
+      const socketWithUser = socket as any;
+      socketWithUser.user = {
+        userId: socket.userId,
+        email: socket.userEmail,
+        role: socket.userRole
+      };
       
-      socket.emit('chat:tool_error', {
-        messageId: data.messageId,
-        toolName: data.toolCall.name,
-        error: String(error),
-      });
+      await enhancedHandler.handleToolApproval(socketWithUser, data);
+    } catch (error) {
+      console.error('🔧 [ENHANCED-HANDLER] Tool approval failed:', error);
+      logger.error('Tool approval failed:', error);
+      socket.emit('error', { message: 'Failed to process tool approval' });
     }
   });
 
-  // Handle message retry requests
-  socket.on('chat:retry_message', async ({ messageId }: { messageId: string }) => {
-    try {
-      logger.info(`Retrying message for user ${userId}`, { messageId });
-      
-      // Find the original message and retry
-      // This would involve re-processing the entire message flow
-      socket.emit('chat:thinking', { messageId });
-      
-      // Implement retry logic here
-      
-    } catch (error) {
-      logger.error('Error retrying message:', error);
-      
-      socket.emit('chat:error', {
-        message: 'Failed to retry message',
-        error: String(error),
-        messageId,
-      });
-    }
+  // Handle disconnection
+  socket.on('disconnect', () => {
+    console.log('🔌 [ENHANCED-HANDLER] Client disconnected');
+    enhancedHandler.cleanup(socket.id);
   });
 
-  logger.info(`Enhanced chat handlers set up for user ${userId}`);
+  logger.info(`Enhanced chat handlers set up for user ${socket.userId}`);
 }
 
 // Enhanced streaming response function

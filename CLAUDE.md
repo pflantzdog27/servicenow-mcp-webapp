@@ -128,6 +128,26 @@ servicenow-mcp-webapp/
 
 ## Recent Improvements
 
+### Version 2.1 (Critical Bug Fixes - Latest)
+- ✅ **Fixed ServiceNow Tool Parameter Issue**
+  - **Problem**: Claude was calling ServiceNow tools with empty arguments `{}`, causing 400 errors
+  - **Root Cause**: Missing or incomplete tool parameter schemas in MCP client
+  - **Solution**: Enhanced tool schema definitions with comprehensive parameter specifications
+  - **Enhanced System Prompt**: Added detailed guidance for proper ServiceNow tool usage
+  - **Result**: Claude now properly extracts parameters from natural language and calls tools correctly
+
+- ✅ **Tool Approval Workflow Perfected**
+  - Complete tool discovery chain: MCP Server → MCP Client → Chat Handler → LLM Service → Claude API
+  - Real-time tool approval dialog matching Claude Desktop experience
+  - Fixed message lookup issues during tool approval process
+  - Enhanced tool execution with proper parameter passing
+
+- ✅ **Comprehensive Tool Schema Enhancement**
+  - 27 ServiceNow tools with detailed parameter schemas
+  - Specific examples and format requirements for each tool
+  - Smart parameter extraction from natural language requests
+  - Proper validation and error handling for tool calls
+
 ### Version 2.0 (Enhanced Architecture)
 - ✅ **Enhanced MCP Integration**
   - Connection pooling for improved performance
@@ -150,7 +170,7 @@ servicenow-mcp-webapp/
   - Queue-based tool execution
   - Enhanced authentication with JWT
   - Database persistence with Prisma ORM
-- ✅ **UI/UX Polish (Latest)**
+- ✅ **UI/UX Polish**
   - Auto-generated chat titles from conversation content
   - Detailed timestamp formatting (relative times, actual hours)
   - Human-readable model names in interface
@@ -215,6 +235,8 @@ If tools show "completed" but with generic responses:
 - **Debug Status Panel**: Shows real-time connection status
 - **Developer Tools Panel**: Monitor system metrics and tool executions
 - **Test Checklist Panel**: Run automated tests for all components
+- **Enhanced Logging**: Comprehensive MCP client debugging with tool schema verification
+- **Tool Parameter Validation**: Real-time validation of tool calls and parameter passing
 
 ## Contributing
 

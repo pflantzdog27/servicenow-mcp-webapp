@@ -30,6 +30,11 @@ export class AnthropicService extends LLMService {
     messages: LLMMessage[],
     onStream?: (chunk: LLMStreamChunk) => void
   ): Promise<LLMResponse> {
+    console.log('\n🤖 [ANTHROPIC] Starting generateResponse method');
+    console.log('🤖 [ANTHROPIC] Available tools state:', this.availableTools);
+    console.log('🤖 [ANTHROPIC] MCP tools count:', this.availableTools?.mcp?.length || 0);
+    console.log('🤖 [ANTHROPIC] Web tools count:', this.availableTools?.web?.length || 0);
+    
     try {
       // Extract system message from conversation or use default
       const systemMessages = messages.filter(msg => msg.role === 'system');
@@ -50,6 +55,13 @@ export class AnthropicService extends LLMService {
         totalToolCount: this.availableTools.mcp.length + this.availableTools.web.length
       });
 
+      // Debug: Check available tools before formatting
+      logger.info(`🔧 [ANTHROPIC-DEBUG] Available tools before formatting:`, {
+        mcpCount: this.availableTools.mcp.length,
+        webCount: this.availableTools.web.length,
+        mcpTools: this.availableTools.mcp.map(t => t.name)
+      });
+
       // Format tools for Claude's native tool calling
       const allTools = [...this.availableTools.mcp, ...this.availableTools.web];
       const tools = allTools.length > 0 ? allTools.map(tool => ({
@@ -57,6 +69,11 @@ export class AnthropicService extends LLMService {
         description: tool.description || 'No description available',
         input_schema: tool.inputSchema
       })) : undefined;
+      
+      logger.info(`🔧 [ANTHROPIC-DEBUG] Formatted tools for Claude:`, {
+        formattedCount: tools ? tools.length : 0,
+        formattedToolNames: tools ? tools.map(t => t.name) : []
+      });
       
       logger.info(`[ANTHROPIC] Prepared ${allTools.length} tools for API call:`, {
         toolNames: allTools.map(t => t.name),
@@ -165,7 +182,8 @@ export class AnthropicService extends LLMService {
   private formatSystemMessage(): string {
     return buildSystemPrompt({
       instanceUrl: process.env.SERVICENOW_INSTANCE_URL,
-      userTimezone: 'UTC'
+      userTimezone: 'UTC',
+      availableTools: this.availableTools.mcp
     });
   }
 }

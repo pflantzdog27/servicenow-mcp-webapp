@@ -1,4 +1,5 @@
 // Shared WebSocket event types for ServiceNow MCP WebApp
+import { ToolApprovalRequest, ToolApprovalResponse, ToolExecutionStatus } from '../../../shared/src/types/mcp';
 
 export interface ToolCall {
   id?: string;
@@ -32,6 +33,9 @@ export interface ClientToServerEvents {
     model: string;
     sessionId?: string;
   }) => void;
+
+  // Tool approval events
+  'tool:approval_response': (data: ToolApprovalResponse) => void;
 
   // Tool retry events
   'chat:retry_tool': (data: {
@@ -68,6 +72,9 @@ export interface ServerToClientEvents {
     finalMessage: ChatMessage;
   }) => void;
 
+  // Tool approval events
+  'tool:approval_required': (data: ToolApprovalRequest) => void;
+
   // Tool execution events
   'chat:tool_start': (data: {
     messageId: string;
@@ -92,6 +99,12 @@ export interface ServerToClientEvents {
     messageId: string;
     toolName: string;
     error: string;
+  }) => void;
+
+  'chat:tool_denied': (data: {
+    messageId: string;
+    toolName: string;
+    reason?: string;
   }) => void;
 
   // Text streaming events

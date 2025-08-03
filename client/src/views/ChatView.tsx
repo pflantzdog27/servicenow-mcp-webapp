@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useRef } from 'react';
 import { useOutletContext } from 'react-router-dom';
 import Sidebar from '../components/Sidebar';
 import EnhancedChatInterface from '../components/NewEnhancedChatInterface';
@@ -13,12 +13,22 @@ interface OutletContext {
 
 function ChatView() {
   const { socket, selectedModel } = useOutletContext<OutletContext>();
+  const chatInterfaceRef = useRef<any>(null);
+
+  const handleSidebarMessage = (message: string) => {
+    if (socket) {
+      socket.emit('chat:message', {
+        message,
+        model: selectedModel
+      });
+    }
+  };
 
   return (
     <>
       {/* Left sidebar - Quick Actions */}
       <div className="w-80 bg-surface border-r border-gray-700 flex-shrink-0">
-        <Sidebar socket={socket} />
+        <Sidebar socket={socket} onSendMessage={handleSidebarMessage} />
       </div>
       
       {/* Center - Enhanced Chat Interface */}

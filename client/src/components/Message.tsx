@@ -1,6 +1,7 @@
 import React, { useState } from 'react';
 import { User, Bot, Clock, Wrench, ChevronDown } from 'lucide-react';
 import EnhancedToolInvocationWithPrism from './EnhancedToolInvocationWithPrism';
+import ToolChain from './tools/ToolChain';
 
 interface ToolCall {
   id?: string;
@@ -23,9 +24,10 @@ interface ChatMessage {
 
 interface MessageProps {
   message: ChatMessage;
+  onRetryTool?: (toolCall: ToolCall) => void;
 }
 
-const Message: React.FC<MessageProps> = ({ message }) => {
+const Message: React.FC<MessageProps> = ({ message, onRetryTool }) => {
   const [showTools, setShowTools] = useState(false);
   
   const formatTime = (date: Date) => {
@@ -116,15 +118,25 @@ const Message: React.FC<MessageProps> = ({ message }) => {
         
         {/* Tool invocations (collapsible) */}
         {hasTools && showTools && message.role === 'assistant' && (
-          <div className="w-full mt-2 space-y-2 animate-in slide-in-from-top-2 duration-200">
-            {message.toolCalls!.map((toolCall, index) => (
-              <EnhancedToolInvocationWithPrism
-                key={toolCall.id || `${message.id}-tool-${index}`}
-                toolCall={toolCall}
-                isCompact={false}
-                defaultExpanded={false}
+          <div className="w-full mt-2 animate-in slide-in-from-top-2 duration-200">
+            {/* Use ToolChain for multiple tools, individual components for single tools */}
+            {message.toolCalls!.length > 1 ? (
+              <ToolChain
+                toolCalls={message.toolCalls!}
+                isVertical={true}
+                showConnectors={true}
+                onRetryTool={onRetryTool}
               />
-            ))}
+            ) : (
+              message.toolCalls!.map((toolCall, index) => (
+                <EnhancedToolInvocationWithPrism
+                  key={toolCall.id || `${message.id}-tool-${index}`}
+                  toolCall={toolCall}
+                  isCompact={false}
+                  defaultExpanded={false}
+                />
+              ))
+            )}
           </div>
         )}
         

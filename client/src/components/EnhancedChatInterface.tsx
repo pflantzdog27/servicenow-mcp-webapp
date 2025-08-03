@@ -3,8 +3,10 @@ import { Socket } from 'socket.io-client';
 import { Send, Loader2 } from 'lucide-react';
 import Message from './Message';
 import ThinkingIndicator from './ThinkingIndicator';
+import ToolApprovalDialog from './ToolApprovalDialog';
 import { useAuth } from '../contexts/AuthContext';
 import chatService, { ChatSession as ChatSessionType } from '../services/chat';
+import { ToolApprovalRequest, ToolApprovalResponse } from '../../../shared/src/types/mcp';
 
 interface ToolCall {
   id?: string;
@@ -48,6 +50,9 @@ const EnhancedChatInterface: React.FC<EnhancedChatInterfaceProps> = ({
     name: string;
     status: 'pending' | 'executing' | 'completed' | 'error';
     displayName: string;
+  }>>([]);
+  const [pendingApproval, setPendingApproval] = useState<ToolApprovalRequest | null>(null);
+  const [approvedTools, setApprovedTools] = useState<Set<string>>(new Set());
   }>>([]);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
@@ -248,6 +253,39 @@ const EnhancedChatInterface: React.FC<EnhancedChatInterfaceProps> = ({
       ));
     };
 
+    // Handle tool approval requests
+    const handleToolApprovalRequired = (request: ToolApprovalRequest) => {
+      console.log('🔐 Tool approval required:', request);
+      setPendingApproval(request);
+    };
+
+    // Handle tool denial
+    const handleToolDenied = ({ messageId, toolName, reason }: {
+      messageId: string;
+      toolName: string;
+      reason?: string;
+    }) => {
+      console.log('❌ Tool denied:', { toolName, reason });
+      
+      // Remove from executing tools
+      setExecutingTools(prev => prev.filter(tool => tool.name !== toolName));
+      
+      // Update tool status in message
+      setMessages(prev => prev.map(msg => {
+        if (msg.id === messageId) {
+          return {
+            ...msg,
+            toolCalls: msg.toolCalls?.map(tool =>
+              tool.name === toolName
+                ? { ...tool, status: 'error', result: { error: reason || 'Permission denied' } }
+                : tool
+            )
+          };
+        }
+        return msg;
+      }));
+    };
+
     // Handle errors
     const handleError = ({ messageId, error }: { messageId?: string; error: string }) => {
       console.error('❌ Stream error:', error);
@@ -280,6 +318,8 @@ const EnhancedChatInterface: React.FC<EnhancedChatInterfaceProps> = ({
     socket.on('chat:tool_result', handleToolResult);
     socket.on('chat:stream_complete', handleStreamComplete);
     socket.on('chat:error', handleError);
+    socket.on('tool:approval_required', handleToolApprovalRequired);
+    socket.on('chat:tool_denied', handleToolDenied);
 
     return () => {
       socket.off('chat:stream_start', handleStreamStart);
@@ -288,6 +328,8 @@ const EnhancedChatInterface: React.FC<EnhancedChatInterfaceProps> = ({
       socket.off('chat:tool_result', handleToolResult);
       socket.off('chat:stream_complete', handleStreamComplete);
       socket.off('chat:error', handleError);
+      socket.off('tool:approval_required', handleToolApprovalRequired);
+      socket.off('chat:tool_denied', handleToolDenied);
     };
   }, [socket]);
 
@@ -331,6 +373,55 @@ const EnhancedChatInterface: React.FC<EnhancedChatInterfaceProps> = ({
     const textarea = e.target;
     textarea.style.height = 'auto';
     textarea.style.height = Math.min(textarea.scrollHeight, 200) + 'px';
+  };
+
+  // Tool approval handlers
+  const handleToolApproval = () => {
+    if (!pendingApproval || !socket) return;
+    
+    const response: ToolApprovalResponse = {
+      id: pendingApproval.id,
+      approved: true,
+      alwaysAllow: false
+    };
+    
+    socket.emit('tool:approval_response', response);
+    setPendingApproval(null);
+  };
+
+  const handleToolDeny = () => {
+    if (!pendingApproval || !socket) return;
+    
+    const response: ToolApprovalResponse = {
+      id: pendingApproval.id,
+      approved: false
+    };
+    
+    socket.emit('tool:approval_response', response);
+    setPendingApproval(null);
+  };
+
+  const handleToolAlwaysAllow = () => {
+    if (!pendingApproval || !socket) return;
+    
+    // Add to approved tools for this session
+    setApprovedTools(prev => new Set([...prev, pendingApproval.toolName]));
+    
+    const response: ToolApprovalResponse = {
+      id: pendingApproval.id,
+      approved: true,
+      alwaysAllow: true
+    };
+    
+    socket.emit('tool:approval_response', response);
+    setPendingApproval(null);
+  };
+
+  const getToolDisplayName = (name: string) => {
+    return name.replace('servicenow-mcp:', '')
+      .split('-')
+      .map(word => word.charAt(0).toUpperCase() + word.slice(1))
+      .join(' ');
   };
 
 
@@ -424,6 +515,17 @@ const EnhancedChatInterface: React.FC<EnhancedChatInterfaceProps> = ({
           <span>Model: {selectedModel}</span>
         </div>
       </div>
+      
+      {/* Tool Approval Dialog */}
+      <ToolApprovalDialog
+        isOpen={!!pendingApproval}
+        toolName={pendingApproval?.toolName || ''}
+        toolDescription={pendingApproval?.toolDescription}
+        toolArguments={pendingApproval?.toolArguments || {}}
+        onApprove={handleToolApproval}
+        onDeny={handleToolDeny}
+        onAlwaysAllow={handleToolAlwaysAllow}
+      />
     </div>
   );
 };

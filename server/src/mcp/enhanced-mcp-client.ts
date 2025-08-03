@@ -51,11 +51,22 @@ export class EnhancedMCPClient {
       
       const response = await connection.client.listTools();
 
+      // Debug: Log full tool definitions
+      console.log('🔧 [MCP-CLIENT] Full tool definitions from server:', JSON.stringify(response.tools, null, 2));
+      
+      // Check schemas for each tool
+      response.tools.forEach(tool => {
+        console.log(`🔧 [MCP-CLIENT] Tool ${tool.name} schema:`, JSON.stringify(tool.inputSchema, null, 2));
+      });
+
       this.availableTools = response.tools.map(tool => ({
         name: `servicenow-mcp:${tool.name}`, // Add the prefix expected by the LLM
         description: tool.description,
         inputSchema: tool.inputSchema
       }));
+
+      // Enhance tool schemas if they're missing or incomplete
+      this.availableTools = this.enhanceToolSchemas(this.availableTools);
 
       this.toolsLoaded = true;
       
@@ -70,6 +81,237 @@ export class EnhancedMCPClient {
         await this.pool.release(connection.id);
       }
     }
+  }
+
+  private enhanceToolSchemas(tools: MCPTool[]): MCPTool[] {
+    return tools.map(tool => {
+      console.log(`🔧 [MCP-CLIENT] Enhancing schema for: ${tool.name}`);
+      
+      // If tool already has a proper schema, keep it
+      if (tool.inputSchema && tool.inputSchema.properties && Object.keys(tool.inputSchema.properties).length > 0) {
+        console.log(`🔧 [MCP-CLIENT] Tool ${tool.name} already has schema, keeping it`);
+        return tool;
+      }
+
+      // Add schemas for ServiceNow tools that are missing them
+      const enhancedTool = { ...tool };
+
+      switch (tool.name) {
+        case 'servicenow-mcp:query-records':
+          enhancedTool.inputSchema = {
+            type: 'object',
+            properties: {
+              table: { 
+                type: 'string', 
+                description: 'ServiceNow table name (e.g., incident, change_request, catalog_item)',
+                examples: ['incident', 'change_request', 'sc_cat_item', 'sys_user']
+              },
+              sysparm_query: { 
+                type: 'string', 
+                description: 'Query filter (e.g., active=true, state=1)',
+                examples: ['active=true', 'state=1', 'priority=1']
+              },
+              sysparm_limit: { 
+                type: 'integer', 
+                description: 'Maximum number of records to return',
+                default: 10,
+                minimum: 1,
+                maximum: 100
+              },
+              sysparm_fields: {
+                type: 'string',
+                description: 'Comma-separated list of fields to return',
+                examples: ['number,short_description,state', 'sys_id,name,active']
+              }
+            },
+            required: ['table']
+          };
+          break;
+
+        case 'servicenow-mcp:create-incident':
+          enhancedTool.inputSchema = {
+            type: 'object',
+            properties: {
+              short_description: { 
+                type: 'string', 
+                description: 'Brief description of the incident',
+                maxLength: 160
+              },
+              description: { 
+                type: 'string', 
+                description: 'Detailed description of the incident'
+              },
+              priority: { 
+                type: 'string', 
+                description: 'Priority level (1-Critical, 2-High, 3-Moderate, 4-Low, 5-Planning)',
+                enum: ['1', '2', '3', '4', '5'],
+                default: '3'
+              },
+              urgency: { 
+                type: 'string', 
+                description: 'Urgency level (1-High, 2-Medium, 3-Low)',
+                enum: ['1', '2', '3'],
+                default: '3'
+              },
+              impact: { 
+                type: 'string', 
+                description: 'Impact level (1-High, 2-Medium, 3-Low)',
+                enum: ['1', '2', '3'],
+                default: '3'
+              },
+              category: { 
+                type: 'string', 
+                description: 'Incident category',
+                examples: ['hardware', 'software', 'network', 'inquiry']
+              },
+              subcategory: { 
+                type: 'string', 
+                description: 'Incident subcategory',
+                examples: ['email', 'server', 'database', 'application']
+              }
+            },
+            required: ['short_description']
+          };
+          break;
+
+        case 'servicenow-mcp:create-catalog-item':
+          enhancedTool.inputSchema = {
+            type: 'object',
+            properties: {
+              command: { 
+                type: 'string', 
+                description: 'Natural language command describing the catalog item to create',
+                examples: [
+                  'Create a catalog item called "Office Supplies" in Hardware',
+                  'Create a catalog item for "Software License Request"'
+                ]
+              }
+            },
+            required: ['command']
+          };
+          break;
+
+        case 'servicenow-mcp:test-connection':
+          enhancedTool.inputSchema = {
+            type: 'object',
+            properties: {},
+            description: 'Test the connection to ServiceNow instance'
+          };
+          break;
+
+        case 'servicenow-mcp:create-variable':
+          enhancedTool.inputSchema = {
+            type: 'object',
+            properties: {
+              command: { 
+                type: 'string', 
+                description: 'Natural language command describing the variable to create',
+                examples: [
+                  'Create a variable called "Department" of type choice with options',
+                  'Create a text variable for "Additional Comments"'
+                ]
+              }
+            },
+            required: ['command']
+          };
+          break;
+
+        case 'servicenow-mcp:create-ui-policy':
+          enhancedTool.inputSchema = {
+            type: 'object',
+            properties: {
+              command: { 
+                type: 'string', 
+                description: 'Natural language command describing the UI policy to create',
+                examples: [
+                  'Create a UI policy that makes Priority mandatory when Impact is High',
+                  'Create a UI policy to hide Category when Type is Request'
+                ]
+              }
+            },
+            required: ['command']
+          };
+          break;
+
+        case 'servicenow-mcp:create-business-rule':
+          enhancedTool.inputSchema = {
+            type: 'object',
+            properties: {
+              command: { 
+                type: 'string', 
+                description: 'Natural language command describing the business rule to create',
+                examples: [
+                  'Create a business rule that sets assignment group when category changes',
+                  'Create a business rule to validate required fields on incident creation'
+                ]
+              }
+            },
+            required: ['command']
+          };
+          break;
+
+        case 'servicenow-mcp:create-script-include':
+          enhancedTool.inputSchema = {
+            type: 'object',
+            properties: {
+              command: { 
+                type: 'string', 
+                description: 'Natural language command describing the script include to create',
+                examples: [
+                  'Create a script include for email notification utilities',
+                  'Create a script include for common LDAP functions'
+                ]
+              }
+            },
+            required: ['command']
+          };
+          break;
+
+        case 'servicenow-mcp:update-record':
+          enhancedTool.inputSchema = {
+            type: 'object',
+            properties: {
+              table: { 
+                type: 'string', 
+                description: 'ServiceNow table name',
+                examples: ['incident', 'change_request', 'sc_cat_item']
+              },
+              sys_id: { 
+                type: 'string', 
+                description: 'Unique identifier of the record to update'
+              },
+              fields: {
+                type: 'object',
+                description: 'Object containing field names and their new values',
+                examples: [
+                  { state: '6', resolution_notes: 'Resolved by restarting service' },
+                  { priority: '2', assignment_group: 'IT Support' }
+                ]
+              }
+            },
+            required: ['table', 'sys_id', 'fields']
+          };
+          break;
+
+        default:
+          // For other tools, provide a basic schema if none exists
+          if (!enhancedTool.inputSchema) {
+            enhancedTool.inputSchema = {
+              type: 'object',
+              properties: {
+                command: {
+                  type: 'string',
+                  description: `Command or parameters for ${tool.name}`
+                }
+              }
+            };
+          }
+          break;
+      }
+
+      console.log(`🔧 [MCP-CLIENT] Enhanced ${tool.name} with schema:`, JSON.stringify(enhancedTool.inputSchema, null, 2));
+      return enhancedTool;
+    });
   }
 
   getAvailableTools(): MCPTool[] {

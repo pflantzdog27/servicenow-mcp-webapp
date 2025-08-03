@@ -5,6 +5,7 @@ import cors from 'cors';
 import dotenv from 'dotenv';
 import { MCPClientManager } from './mcp/mcp-client';
 import { ChatHandler } from './websocket/chat-handler';
+import { EnhancedChatHandlerWithApproval } from './websocket/enhanced-chat-handler-with-approval';
 import { StreamHandler } from './websocket/stream-handler';
 import { TestHandlers } from './websocket/test-handlers';
 import { authenticateSocket, AuthenticatedSocket } from './middleware/socketAuth';
@@ -64,6 +65,7 @@ app.use('/test-llm-tools', testLlmToolsRoutes);
 // Initialize MCP client manager
 const mcpClientManager = new MCPClientManager();
 const chatHandler = new ChatHandler(mcpClientManager);
+const enhancedChatHandler = new EnhancedChatHandlerWithApproval(mcpClientManager);
 const testHandlers = new TestHandlers(mcpClientManager);
 const streamHandler = new StreamHandler();
 
@@ -77,16 +79,42 @@ io.on('connection', (socket: AuthenticatedSocket) => {
   // Setup test handlers for development tools
   testHandlers.setupTestHandlers(socket);
 
-  // Handle chat messages
+  // Handle chat messages with enhanced approval flow
   socket.on('chat:message', async (data) => {
     try {
       if (!socket.user) {
         return socket.emit('error', { message: 'Authentication required' });
       }
-      await chatHandler.handleMessage(socket, data);
+      
+      // Use enhanced handler with tool approval for production
+      // Fall back to legacy handler if enhanced fails
+      console.log('🚨 [APP] About to call enhanced handler');
+      try {
+        console.log('🚨 [APP] Enhanced handler exists?', !!enhancedChatHandler);
+        console.log('🚨 [APP] Calling enhanced handler...');
+        await enhancedChatHandler.handleMessage(socket, data);
+        console.log('🚨 [APP] Enhanced handler completed successfully!');
+      } catch (enhancedError) {
+        console.error('🚨 [APP] Enhanced handler FAILED, falling back to legacy:', enhancedError);
+        logger.error('Enhanced handler failed, falling back to legacy:', enhancedError);
+        await chatHandler.handleMessage(socket, data);
+      }
     } catch (error) {
       logger.error('Error handling chat message:', error);
       socket.emit('error', { message: 'Failed to process message' });
+    }
+  });
+
+  // Handle tool approval responses
+  socket.on('tool:approval_response', async (data) => {
+    try {
+      if (!socket.user) {
+        return socket.emit('error', { message: 'Authentication required' });
+      }
+      await enhancedChatHandler.handleToolApproval(socket, data);
+    } catch (error) {
+      logger.error('Error handling tool approval:', error);
+      socket.emit('error', { message: 'Failed to process tool approval' });
     }
   });
 
@@ -103,6 +131,7 @@ io.on('connection', (socket: AuthenticatedSocket) => {
   socket.on('disconnect', () => {
     logger.info(`Client disconnected: ${socket.id}`);
     chatHandler.cleanup(socket.id);
+    enhancedChatHandler.cleanup(socket.id);
   });
 });
 

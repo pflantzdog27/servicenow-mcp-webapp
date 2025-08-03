@@ -1,14 +1,10 @@
-import { Client } from '@modelcontextprotocol/sdk/client/index.js';
-import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js';
 import { createLogger } from '../utils/logger';
+import { MCPProtocolManager, MCPTool, MCPInitializationResult } from './protocols/mcp-protocol';
 
 const logger = createLogger();
 
-export interface MCPTool {
-  name: string;
-  description?: string;
-  inputSchema: any;
-}
+// Re-export from protocol manager
+export { MCPTool } from './protocols/mcp-protocol';
 
 export interface MCPToolCall {
   name: string;
@@ -25,34 +21,30 @@ export interface MCPToolResult {
 }
 
 export class MCPClientManager {
-  private client: Client | null = null;
-  private availableTools: MCPTool[] = [];
-  private isConnected = false;
+  private protocolManager: MCPProtocolManager;
   private requestQueue: Array<() => Promise<void>> = [];
   private isProcessingQueue = false;
+  private initializationResult: MCPInitializationResult | null = null;
+
+  constructor() {
+    this.protocolManager = new MCPProtocolManager();
+  }
 
   async initialize(): Promise<void> {
     try {
-      this.client = new Client({
-        name: "servicenow-web-app",
-        version: "1.0.0",
-      });
-
       const mcpPath = process.env.SERVICENOW_MCP_PATH;
       if (!mcpPath) {
         throw new Error('SERVICENOW_MCP_PATH environment variable is required');
       }
 
-      const transport = new StdioClientTransport({
-        command: mcpPath,
+      logger.info('Initializing MCP client with protocol negotiation');
+      this.initializationResult = await this.protocolManager.initialize(mcpPath);
+      
+      logger.info('MCP client initialized successfully', {
+        serverInfo: this.initializationResult.serverInfo,
+        toolCount: this.protocolManager.getAvailableTools().length,
+        capabilities: this.initializationResult.capabilities
       });
-
-      await this.client.connect(transport);
-      this.isConnected = true;
-      logger.info('Connected to ServiceNow MCP server');
-
-      // Fetch available tools
-      await this.fetchAvailableTools();
       
       // Start processing queued requests
       this.processQueue();
@@ -63,30 +55,34 @@ export class MCPClientManager {
     }
   }
 
-  private async fetchAvailableTools(): Promise<void> {
-    if (!this.client) throw new Error('MCP client not initialized');
-
+  async refreshTools(): Promise<void> {
     try {
-      // Use the listTools method instead of direct request
-      const response = await this.client.listTools();
-
-      this.availableTools = response.tools.map(tool => ({
-        name: tool.name,
-        description: tool.description,
-        inputSchema: tool.inputSchema
-      }));
-
-      logger.info(`Loaded ${this.availableTools.length} ServiceNow MCP tools: ${this.availableTools.map(t => t.name).join(', ')}`);
+      await this.protocolManager.refreshTools();
+      const tools = this.protocolManager.getAvailableTools();
+      logger.info(`Refreshed ${tools.length} ServiceNow MCP tools: ${tools.map(t => t.name).join(', ')}`);
     } catch (error) {
-      logger.error('Failed to fetch available tools:', error);
-      // Continue without tools - the app can still work for basic chat
-      this.availableTools = [];
-      logger.warn('Continuing without MCP tools - basic chat functionality will work');
+      logger.error('Failed to refresh tools:', error);
     }
   }
 
   getAvailableTools(): MCPTool[] {
-    return this.availableTools;
+    console.log('📦 [MCP-MANAGER] getAvailableTools called');
+    const tools = this.protocolManager.getAvailableTools();
+    console.log('📦 [MCP-MANAGER] Retrieved tools from protocol manager:', tools.length);
+    console.log('📦 [MCP-MANAGER] First tool:', tools[0]);
+    return tools;
+  }
+
+  getInitializationResult(): MCPInitializationResult | null {
+    return this.initializationResult;
+  }
+
+  getCapabilities() {
+    return this.protocolManager.getCapabilities();
+  }
+
+  getServerInfo() {
+    return this.protocolManager.getServerInfo();
   }
 
   async executeTool(toolCall: MCPToolCall): Promise<MCPToolResult> {
@@ -107,18 +103,14 @@ export class MCPClientManager {
   }
 
   private async executeToolInternal(toolCall: MCPToolCall): Promise<MCPToolResult> {
-    if (!this.client || !this.isConnected) {
+    if (!this.protocolManager.isConnected()) {
       throw new Error('MCP client not connected');
     }
 
     try {
       logger.info(`Executing MCP tool: ${toolCall.name}`, { arguments: toolCall.arguments });
       
-      // Use the callTool method instead of direct request
-      const response = await this.client.callTool({
-        name: toolCall.name,
-        arguments: toolCall.arguments
-      });
+      const response = await this.protocolManager.callTool(toolCall.name, toolCall.arguments);
 
       logger.info(`MCP tool ${toolCall.name} completed successfully`);
       
@@ -154,18 +146,16 @@ export class MCPClientManager {
   }
 
   async disconnect(): Promise<void> {
-    if (this.client && this.isConnected) {
-      try {
-        await this.client.close();
-        this.isConnected = false;
-        logger.info('Disconnected from ServiceNow MCP server');
-      } catch (error) {
-        logger.error('Error disconnecting from MCP server:', error);
-      }
+    try {
+      await this.protocolManager.disconnect();
+      this.initializationResult = null;
+      logger.info('Disconnected from ServiceNow MCP server');
+    } catch (error) {
+      logger.error('Error disconnecting from MCP server:', error);
     }
   }
 
   isClientConnected(): boolean {
-    return this.isConnected;
+    return this.protocolManager.isConnected();
   }
 }

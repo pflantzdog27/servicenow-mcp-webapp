@@ -8,6 +8,7 @@ import { AuthenticatedSocket } from '../middleware/socketAuth';
 import { createLogger } from '../utils/logger';
 import { PrismaClient, ToolExecutionStatus } from '@prisma/client';
 import { ChatService } from '../services/chat';
+import { ConversationFlowValidator } from '../validators/conversation-flow-validator';
 
 const logger = createLogger();
 const prisma = new PrismaClient();
@@ -19,12 +20,30 @@ interface Message {
   timestamp: Date;
 }
 
+interface CreatedItem {
+  type: string; // 'catalog_item', 'ui_policy', 'incident', etc.
+  sys_id: string;
+  name: string;
+  created_at: Date;
+}
+
+interface WorkflowStep {
+  step: string;
+  completed: boolean;
+  result?: any;
+}
+
+type UserIntent = 'create' | 'query' | 'update' | 'delete' | 'reference_existing' | null;
+
 interface ConversationContext {
   messages: Message[];
   lastToolUse: Date | null;
   serviceNowContext: {
     recentRecords: string[];
     currentWorkflow: string | null;
+    createdItems: CreatedItem[];
+    lastIntent: UserIntent;
+    workflowSteps: WorkflowStep[];
   };
   dbSessionId?: string;
 }
@@ -35,6 +54,7 @@ export class ContextAwareMessageHandler {
   private resultFormatter: ResultFormatter;
   private enhancedToolExecutor: EnhancedToolExecutor;
   private chatService: ChatService;
+  private flowValidator: ConversationFlowValidator;
   
   constructor(
     private mcpClientManager: MCPClientManager,
@@ -44,6 +64,7 @@ export class ContextAwareMessageHandler {
     this.resultFormatter = new ResultFormatter(this.instanceUrl);
     this.enhancedToolExecutor = new EnhancedToolExecutor(mcpClientManager);
     this.chatService = new ChatService();
+    this.flowValidator = new ConversationFlowValidator();
   }
 
   async processMessage(
@@ -74,6 +95,9 @@ export class ContextAwareMessageHandler {
         });
         dbSessionId = dbSession.id;
         context.dbSessionId = dbSessionId;
+        
+        // Load conversation context from database if it exists
+        await this.loadConversationContext(dbSessionId, context);
       }
       
       // Create user message in database
@@ -100,8 +124,10 @@ export class ContextAwareMessageHandler {
       }
       
       // Analyze message intent
+      const userIntent = this.distinguishIntent(message, context);
+      context.serviceNowContext.lastIntent = userIntent;
       const needsTools = this.analyzeMessageIntent(message, context);
-      logger.info(`Intent analysis: needsTools=${needsTools}`);
+      logger.info(`Intent analysis: userIntent=${userIntent}, needsTools=${needsTools}`);
       
       // Build conversation messages for LLM
       const llmMessages = this.buildLLMMessages(context, needsTools);
@@ -118,7 +144,11 @@ export class ContextAwareMessageHandler {
         
         const toolsForLLM = {
           mcp: allTools.filter(t => t.type === 'mcp').map(t => ({ ...t, type: undefined })),
-          web: allTools.filter(t => t.type === 'web')
+          web: allTools.filter(t => t.type === 'web').map(t => ({ 
+            ...t, 
+            description: t.description || 'No description available',
+            type: 'web' as const 
+          }))
         };
         
         logger.info('🎯 Tools configured for LLM:', {
@@ -172,6 +202,22 @@ export class ContextAwareMessageHandler {
       
       if (response.toolCalls && response.toolCalls.length > 0) {
         logger.info(`🔧 Processing ${response.toolCalls.length} tool calls:`, response.toolCalls.map(t => t.name));
+        
+        // Validate tool selection before execution
+        const validation = this.flowValidator.validateToolSelection(
+          response.toolCalls.map(tc => ({ name: tc.name, arguments: tc.arguments })),
+          context,
+          message
+        );
+        
+        if (!validation.valid) {
+          logger.warn('⚠️ Tool selection validation failed:', validation);
+          // Log the validation issue but continue - let the LLM decide
+          socket.emit('chat:warning', {
+            messageId: assistantDbMessage.id,
+            warning: validation.suggestion
+          });
+        }
         
         for (const toolCall of response.toolCalls) {
           let toolExecution;
@@ -227,6 +273,9 @@ export class ContextAwareMessageHandler {
             
             // Update conversation context with ServiceNow data
             this.updateServiceNowContext(context, toolCall.name, toolResult);
+            
+            // Persist updated context to database
+            await this.persistConversationContext(dbSessionId, context);
             
             // Add to tool invocations for context (but don't add to finalContent to avoid duplication)
             toolInvocations.push({
@@ -383,13 +432,103 @@ export class ContextAwareMessageHandler {
         lastToolUse: null,
         serviceNowContext: {
           recentRecords: [],
-          currentWorkflow: null
+          currentWorkflow: null,
+          createdItems: [],
+          lastIntent: null,
+          workflowSteps: []
         }
       });
     }
     return this.conversationHistory.get(userId)!;
   }
   
+  private distinguishIntent(message: string, context: ConversationContext): UserIntent {
+    const lowercaseMessage = message.toLowerCase();
+    
+    // Query patterns - looking for existing items
+    const queryPatterns = [
+      /find (the )?(existing|current|my|all)/i,
+      /search for .* (created|existing)/i,
+      /query (the )?(catalog|items|records)/i,
+      /what .* (created|have|exist)/i,
+      /show me (the )?(existing|current|all)/i,
+      /list (all )?(the )?/i,
+      /get (all )?(the )?existing/i,
+      /look for/i,
+      /check (the )?existing/i
+    ];
+    
+    // Create patterns - explicitly creating new items
+    const createPatterns = [
+      /create (a )?(new|another)/i,
+      /add (a )?(new)/i,
+      /make (a )?(new)/i,
+      /set up (a )?(new)/i,
+      /generate (a )?(new)/i,
+      /build (a )?(new)/i
+    ];
+    
+    // Reference patterns - referring to recently created items
+    const referencePatterns = [
+      /\b(this|that|it|the) (item|catalog|incident|request|record)/i,
+      /\bthe one (we |I )?(just )?(created|made)/i,
+      /\b(does|is) (this|that|it)/i,
+      /\bfor (this|that|it)/i
+    ];
+    
+    // Update patterns
+    const updatePatterns = [
+      /update/i,
+      /modify/i,
+      /change/i,
+      /edit/i,
+      /set .* to/i
+    ];
+    
+    // Delete patterns
+    const deletePatterns = [
+      /delete/i,
+      /remove/i,
+      /cancel/i,
+      /deactivate/i
+    ];
+    
+    // Check for reference to recent items first
+    if (referencePatterns.some(p => p.test(message)) && context.serviceNowContext.createdItems.length > 0) {
+      // User is referring to something recently created
+      return 'reference_existing';
+    }
+    
+    // Check explicit patterns
+    if (queryPatterns.some(p => p.test(message))) {
+      return 'query';
+    }
+    
+    if (createPatterns.some(p => p.test(message))) {
+      return 'create';
+    }
+    
+    if (updatePatterns.some(p => p.test(message))) {
+      return 'update';
+    }
+    
+    if (deletePatterns.some(p => p.test(message))) {
+      return 'delete';
+    }
+    
+    // Default heuristics based on keywords
+    if (lowercaseMessage.includes('create') && !lowercaseMessage.includes('created')) {
+      return 'create';
+    }
+    
+    if (lowercaseMessage.includes('find') || lowercaseMessage.includes('search') || 
+        lowercaseMessage.includes('query') || lowercaseMessage.includes('get')) {
+      return 'query';
+    }
+    
+    return null;
+  }
+
   private analyzeMessageIntent(message: string, context: ConversationContext): boolean {
     const lowercaseMessage = message.toLowerCase();
     
@@ -514,12 +653,177 @@ export class ContextAwareMessageHandler {
         context.serviceNowContext.recentRecords.slice(-5);
     }
     
+    // Track created items based on tool name and result
+    if (toolName.includes('create') && !result.isError) {
+      let createdItem: CreatedItem | null = null;
+      
+      // Parse the result to extract sys_id and name
+      try {
+        // Check for sys_id in the result
+        const sysIdMatch = content.match(/sys_id['":\s]+([a-f0-9]{32})/i);
+        const nameMatch = content.match(/(?:name|title|short_description)['":\s]+([^"',\n]+)/i);
+        
+        if (sysIdMatch) {
+          const itemType = this.determineItemType(toolName);
+          createdItem = {
+            type: itemType,
+            sys_id: sysIdMatch[1],
+            name: nameMatch?.[1] || `${itemType} ${sysIdMatch[1].substring(0, 8)}`,
+            created_at: new Date()
+          };
+        }
+        
+        // Special handling for catalog items
+        if (toolName === 'servicenow-mcp:create-catalog-item' || toolName.includes('catalog')) {
+          const catalogMatch = content.match(/catalog item['":\s]*([^"',\n]+)/i);
+          if (catalogMatch && sysIdMatch) {
+            createdItem = {
+              type: 'catalog_item',
+              sys_id: sysIdMatch[1],
+              name: catalogMatch[1],
+              created_at: new Date()
+            };
+          }
+        }
+        
+        // Add to created items list
+        if (createdItem) {
+          context.serviceNowContext.createdItems.push(createdItem);
+          // Keep only the last 10 created items
+          context.serviceNowContext.createdItems = 
+            context.serviceNowContext.createdItems.slice(-10);
+          
+          logger.info('📝 Tracked created item:', createdItem);
+        }
+      } catch (error) {
+        logger.error('Error parsing created item result:', error);
+      }
+    }
+    
     // Track workflow context
     if (toolName.includes('workflow') || toolName.includes('approval')) {
       const workflowMatch = content.match(/workflow['":\s]*([^",\n]+)/i);
       if (workflowMatch) {
         context.serviceNowContext.currentWorkflow = workflowMatch[1];
       }
+    }
+    
+    // Track workflow steps
+    if (context.serviceNowContext.currentWorkflow) {
+      const stepCompleted: WorkflowStep = {
+        step: toolName,
+        completed: !result.isError,
+        result: result.isError ? result.error : 'Success'
+      };
+      context.serviceNowContext.workflowSteps.push(stepCompleted);
+    }
+  }
+  
+  private determineItemType(toolName: string): string {
+    const toolTypeMap: Record<string, string> = {
+      'create-catalog-item': 'catalog_item',
+      'create-incident': 'incident',
+      'create-problem': 'problem',
+      'create-change': 'change_request',
+      'create-request': 'request',
+      'create-ui-policy': 'ui_policy',
+      'create-variable': 'catalog_variable',
+      'create-workflow': 'workflow',
+      'create-user': 'user',
+      'create-group': 'group'
+    };
+    
+    for (const [key, type] of Object.entries(toolTypeMap)) {
+      if (toolName.includes(key)) {
+        return type;
+      }
+    }
+    
+    return 'record';
+  }
+  
+  private async persistConversationContext(sessionId: string, context: ConversationContext): Promise<void> {
+    try {
+      // Get current session metadata
+      const session = await prisma.chatSession.findUnique({
+        where: { id: sessionId },
+        select: { metadata: true }
+      });
+      
+      const existingMetadata = (session?.metadata as any) || {};
+      
+      // Update with conversation context
+      const updatedMetadata = {
+        ...existingMetadata,
+        conversationContext: {
+          createdItems: context.serviceNowContext.createdItems,
+          lastIntent: context.serviceNowContext.lastIntent,
+          workflowSteps: context.serviceNowContext.workflowSteps,
+          currentWorkflow: context.serviceNowContext.currentWorkflow,
+          recentRecords: context.serviceNowContext.recentRecords
+        }
+      };
+      
+      await prisma.chatSession.update({
+        where: { id: sessionId },
+        data: { metadata: updatedMetadata }
+      });
+      
+      logger.info('💾 Persisted conversation context to database', {
+        sessionId,
+        createdItemsCount: context.serviceNowContext.createdItems.length
+      });
+    } catch (error) {
+      logger.error('Failed to persist conversation context:', error);
+      // Don't throw - this is a non-critical operation
+    }
+  }
+  
+  private async loadConversationContext(sessionId: string, context: ConversationContext): Promise<void> {
+    try {
+      const session = await prisma.chatSession.findUnique({
+        where: { id: sessionId },
+        select: { metadata: true }
+      });
+      
+      if (session?.metadata) {
+        const metadata = session.metadata as any;
+        if (metadata.conversationContext) {
+          // Restore conversation context from database
+          const savedContext = metadata.conversationContext;
+          
+          if (savedContext.createdItems) {
+            context.serviceNowContext.createdItems = savedContext.createdItems.map((item: any) => ({
+              ...item,
+              created_at: new Date(item.created_at) // Convert string back to Date
+            }));
+          }
+          
+          if (savedContext.lastIntent) {
+            context.serviceNowContext.lastIntent = savedContext.lastIntent;
+          }
+          
+          if (savedContext.workflowSteps) {
+            context.serviceNowContext.workflowSteps = savedContext.workflowSteps;
+          }
+          
+          if (savedContext.currentWorkflow) {
+            context.serviceNowContext.currentWorkflow = savedContext.currentWorkflow;
+          }
+          
+          if (savedContext.recentRecords) {
+            context.serviceNowContext.recentRecords = savedContext.recentRecords;
+          }
+          
+          logger.info('📂 Loaded conversation context from database', {
+            sessionId,
+            createdItemsCount: context.serviceNowContext.createdItems.length
+          });
+        }
+      }
+    } catch (error) {
+      logger.error('Failed to load conversation context:', error);
+      // Don't throw - this is a non-critical operation
     }
   }
   

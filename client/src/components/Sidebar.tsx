@@ -9,45 +9,41 @@ import {
   Plus
 } from 'lucide-react';
 
-interface SidebarProps {
-  socket: Socket | null;
-}
-
 const quickActions = [
   {
     id: 'create-incident',
     label: 'Create Incident',
     icon: AlertCircle,
     description: 'Report and track issues',
-    prompt: 'Create a new incident for '
+    message: 'I need to create a new incident to report an issue with'
   },
   {
     id: 'update-change',
     label: 'Update Change Request',
     icon: GitPullRequest,
     description: 'Modify change requests',
-    prompt: 'Update change request '
+    message: 'I need to update a change request. Can you help me find and modify the change for'
   },
   {
     id: 'new-catalog-item',
     label: 'New Catalog Item',
     icon: Package,
     description: 'Add service catalog items',
-    prompt: 'Create a new catalog item for '
+    message: 'I want to create a new catalog item for requesting'
   },
   {
     id: 'manage-groups',
     label: 'Manage Groups',
     icon: Users,
     description: 'User and group management',
-    prompt: 'Help me manage groups for '
+    message: 'I need help managing user groups and assignments for'
   },
   {
     id: 'generate-report',
     label: 'Generate Report',
     icon: FileText,
     description: 'Create custom reports',
-    prompt: 'Generate a report for '
+    message: 'I need to generate a report showing data about'
   }
 ];
 
@@ -55,35 +51,51 @@ const templates = [
   {
     id: 'office-supplies',
     name: 'Office Supplies Request',
-    description: 'Standard office supply catalog item'
+    description: 'Standard office supply catalog item',
+    message: 'Create an Office Supplies Request catalog item with variables for item type, quantity, and delivery location. Include approval workflow and fulfillment process.'
   },
   {
     id: 'hardware-refresh',
     name: 'Hardware Refresh',
-    description: 'Computer replacement workflow'
+    description: 'Computer replacement workflow',
+    message: 'Set up a Hardware Refresh catalog item for laptop and desktop replacement requests. Include variables for current equipment, preferred new equipment, and business justification.'
   },
   {
     id: 'access-request',
     name: 'Access Request Form',
-    description: 'System access request template'
+    description: 'System access request template',
+    message: 'Create an Access Request catalog item for requesting system access. Include variables for system name, access level, business justification, and manager approval.'
   }
 ];
 
-const Sidebar: React.FC<SidebarProps> = ({ socket }) => {
+interface SidebarProps {
+  socket: Socket | null;
+  onSendMessage?: (message: string) => void;
+}
+
+const Sidebar: React.FC<SidebarProps> = ({ socket, onSendMessage }) => {
   const handleQuickAction = (action: typeof quickActions[0]) => {
-    if (socket) {
-      socket.emit('quick_action', {
-        actionId: action.id,
-        prompt: action.prompt
+    if (onSendMessage) {
+      // Send natural language message to chat instead of direct action
+      onSendMessage(action.message);
+    } else if (socket) {
+      // Fallback to socket emission for backward compatibility
+      socket.emit('chat:message', {
+        message: action.message,
+        model: 'claude-sonnet-4-20250514'
       });
     }
   };
 
   const handleTemplate = (template: typeof templates[0]) => {
-    if (socket) {
-      socket.emit('template_selected', {
-        templateId: template.id,
-        name: template.name
+    if (onSendMessage) {
+      // Send natural language message to chat instead of direct template
+      onSendMessage(template.message);
+    } else if (socket) {
+      // Fallback to socket emission for backward compatibility
+      socket.emit('chat:message', {
+        message: template.message,
+        model: 'claude-sonnet-4-20250514'
       });
     }
   };

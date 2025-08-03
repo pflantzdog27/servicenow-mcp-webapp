@@ -5,8 +5,10 @@ import EnhancedMessage from './EnhancedMessage';
 import StreamingMessageRenderer from './StreamingMessageRenderer';
 import DevToolsIntegration from './DevToolsIntegration';
 import ErrorBoundary from './ErrorBoundary';
+import ToolApprovalDialog from './ToolApprovalDialog';
 import chatService, { ChatSession as ChatSessionType } from '../services/chat';
 import { useAuth } from '../contexts/AuthContext';
+import { ToolApprovalRequest, ToolApprovalResponse } from '../../../shared/src/types/mcp';
 
 interface ToolCall {
   id?: string;
@@ -56,6 +58,7 @@ const EnhancedChatInterface: React.FC<EnhancedChatInterfaceProps> = ({
   const [streamingMessages, setStreamingMessages] = useState<Map<string, StreamingMessage>>(new Map());
   const [currentSession, setCurrentSession] = useState<ChatSessionType | null>(null);
   const [isLoadingSession, setIsLoadingSession] = useState(false);
+  const [pendingApproval, setPendingApproval] = useState<ToolApprovalRequest | null>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
 
@@ -117,6 +120,15 @@ const EnhancedChatInterface: React.FC<EnhancedChatInterfaceProps> = ({
 
     loadSession();
   }, [isAuthenticated, chatId]);
+
+  // Handle tool approval response (component level scope)
+  const handleToolApproval = (response: ToolApprovalResponse) => {
+    if (socket) {
+      console.log('🔐 Sending tool approval response:', response);
+      socket.emit('tool:approval_response', response);
+    }
+    setPendingApproval(null);
+  };
 
   // Enhanced WebSocket event handlers
   useEffect(() => {
@@ -376,6 +388,14 @@ const EnhancedChatInterface: React.FC<EnhancedChatInterfaceProps> = ({
       setMessages(prev => [...prev, errorMessage]);
     };
 
+    // Handle tool approval requests
+    const handleToolApprovalRequired = (request: ToolApprovalRequest) => {
+      console.log('🔐 [FRONTEND] Tool approval required:', request);
+      console.log('🔐 [FRONTEND] Setting pending approval...');
+      setPendingApproval(request);
+      console.log('🔐 [FRONTEND] Pending approval set!');
+    };
+
     // Register all event handlers
     socket.on('chat:stream_start', handleStreamStart);
     socket.on('chat:thinking', handleThinking);
@@ -393,6 +413,16 @@ const EnhancedChatInterface: React.FC<EnhancedChatInterfaceProps> = ({
       });
     });
     socket.on('chat:error', handleError);
+    console.log('🔐 [FRONTEND] Registering tool:approval_required listener');
+    
+    // Debug: Listen for ALL events to see what's being received
+    socket.onAny((eventName, ...args) => {
+      if (eventName.includes('approval') || eventName.includes('tool')) {
+        console.log('🔐 [FRONTEND-DEBUG] Received event:', eventName, args);
+      }
+    });
+    
+    socket.on('tool:approval_required', handleToolApprovalRequired);
 
     return () => {
       socket.off('chat:stream_start', handleStreamStart);
@@ -404,6 +434,7 @@ const EnhancedChatInterface: React.FC<EnhancedChatInterfaceProps> = ({
       socket.off('chat:text_stream', handleTextStream);
       socket.off('chat:stream_complete');
       socket.off('chat:error', handleError);
+      socket.off('tool:approval_required', handleToolApprovalRequired);
     };
   }, [socket, streamingMessages]);
 
@@ -567,6 +598,26 @@ const EnhancedChatInterface: React.FC<EnhancedChatInterfaceProps> = ({
           </div>
         </div>
       </div>
+
+      {/* Tool Approval Dialog */}
+      {pendingApproval && (
+        <ToolApprovalDialog
+          isOpen={!!pendingApproval}
+          toolName={pendingApproval.toolName}
+          toolDescription={pendingApproval.toolDescription || `Execute ${pendingApproval.toolName} tool`}
+          toolArguments={pendingApproval.toolArguments}
+          onApprove={() => handleToolApproval({
+            id: pendingApproval.id,
+            approved: true,
+            reason: 'User approved'
+          })}
+          onDeny={() => handleToolApproval({
+            id: pendingApproval.id,
+            approved: false,
+            reason: 'User denied'
+          })}
+        />
+      )}
 
       {/* Developer Tools Integration */}
       <DevToolsIntegration 
