@@ -175,7 +175,23 @@ const EnhancedChatInterface: React.FC<EnhancedChatInterfaceProps> = ({
       toolName: string; 
       arguments: any 
     }) => {
-      console.log('🔧 Tool started:', { messageId, toolName });
+      console.log('🔧 Tool started:', { messageId, toolName, args });
+      console.log('🔧 [FRONTEND DEBUG] Raw event data:', { messageId, toolName, arguments: args, typeof_toolName: typeof toolName });
+      console.log(`🔧 [WEBSOCKET-EVENT] chat:tool_start received - Tool: ${toolName}`);
+      console.log(`🔧 [ARGUMENTS-CHECK] Arguments received:`, {
+        hasArgs: !!args,
+        argsType: typeof args,
+        argsKeys: args && typeof args === 'object' ? Object.keys(args) : [],
+        isEmpty: !args || (typeof args === 'object' && Object.keys(args).length === 0),
+        rawArgs: args
+      });
+      
+      if (!args || (typeof args === 'object' && Object.keys(args).length === 0)) {
+        console.log(`🚨 [EMPTY-ARGS] WARNING: Tool ${toolName} called with empty arguments!`);
+        console.log(`🚨 [FIX-CHECK] Emergency parameter extraction should be handling this on backend`);
+      } else {
+        console.log(`✅ [ARGS-OK] Tool ${toolName} has valid arguments - fixes working!`);
+      }
       
       setMessages(prev => prev.map(msg => {
         if (msg.id === messageId) {
@@ -186,6 +202,15 @@ const EnhancedChatInterface: React.FC<EnhancedChatInterfaceProps> = ({
             status: 'executing',
             startTime: new Date()
           };
+          
+          console.log('🔧 [FRONTEND DEBUG] Created ToolCall object:', {
+            id: newToolCall.id,
+            name: newToolCall.name,
+            arguments: newToolCall.arguments,
+            status: newToolCall.status,
+            typeof_name: typeof newToolCall.name,
+            name_length: newToolCall.name?.length
+          });
           
           return {
             ...msg,
@@ -230,6 +255,9 @@ const EnhancedChatInterface: React.FC<EnhancedChatInterfaceProps> = ({
     }) => {
       console.log('✅ Tool completed:', { messageId, toolName, executionTime });
       
+      // CRITICAL: Reset loading states to allow new messages
+      setIsLoading(false);
+      
       setMessages(prev => prev.map(msg => {
         if (msg.id === messageId) {
           return {
@@ -268,6 +296,9 @@ const EnhancedChatInterface: React.FC<EnhancedChatInterfaceProps> = ({
       error: string 
     }) => {
       console.error('❌ Tool failed:', { messageId, toolName, error });
+      
+      // CRITICAL: Reset loading states to allow new messages
+      setIsLoading(false);
       
       setMessages(prev => prev.map(msg => {
         if (msg.id === messageId) {
@@ -332,7 +363,9 @@ const EnhancedChatInterface: React.FC<EnhancedChatInterfaceProps> = ({
     }) => {
       console.log('🏁 Stream completed:', messageId, 'finalMessage:', finalMessage);
       
+      // CRITICAL: Reset all loading states to allow new messages
       setStreamingMessageId(null);
+      setIsLoading(false);
       setStreamingMessages(prev => {
         const newMap = new Map(prev);
         newMap.delete(messageId);

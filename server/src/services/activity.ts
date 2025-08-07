@@ -113,11 +113,42 @@ export class ActivityService {
         }
 
         const activity = groupedActivities.get(key)!;
+        
+        // Safe JSON parsing for arguments
+        let parsedArguments = {};
+        if (execution.arguments) {
+          if (typeof execution.arguments === 'string') {
+            try {
+              parsedArguments = JSON.parse(execution.arguments);
+            } catch (error) {
+              logger.warn('Failed to parse execution arguments as JSON:', execution.arguments);
+              parsedArguments = { raw: execution.arguments };
+            }
+          } else {
+            parsedArguments = execution.arguments;
+          }
+        }
+        
+        // Safe JSON parsing for result
+        let parsedResult = null;
+        if (execution.result) {
+          if (typeof execution.result === 'string') {
+            try {
+              parsedResult = JSON.parse(execution.result);
+            } catch (error) {
+              logger.warn('Failed to parse execution result as JSON:', execution.result);
+              parsedResult = { raw: execution.result };
+            }
+          } else {
+            parsedResult = execution.result;
+          }
+        }
+        
         activity.operations.push({
           tool: execution.toolName,
-          arguments: execution.arguments ? JSON.parse(execution.arguments) : {},
+          arguments: parsedArguments,
           success: execution.status === ToolExecutionStatus.COMPLETED,
-          result: execution.result ? JSON.parse(execution.result) : null
+          result: parsedResult
         });
       }
 

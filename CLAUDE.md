@@ -126,6 +126,105 @@ servicenow-mcp-webapp/
 └── CLAUDE.md            # This file
 ```
 
+## WebSocket Handler Architecture
+
+The application uses a sophisticated multi-layer handler system for processing chat messages with enhanced debugging and monitoring capabilities.
+
+### Handler Flow (Enhanced Mode)
+```
+Client WebSocket Message
+        ↓
+1. app-enhanced.ts (Entry Point)
+   - Displays startup banner with TypeScript source confirmation
+   - Initializes MCP connection pool
+   - Sets up Socket.io with authentication
+        ↓
+2. setupEnhancedChatHandlers() (Routing Layer)
+   - Creates MCPClientAdapter bridge
+   - Instantiates EnhancedChatHandlerWithApproval
+   - Routes 'chat:message' events
+        ↓
+3. EnhancedChatHandlerWithApproval (Business Logic)
+   - Handles tool approval workflow
+   - Manages conversation context
+   - Processes LLM responses
+   - Executes MCP tools with retry logic
+        ↓
+4. MCP Tool Execution (Integration Layer)
+   - Parameter transformation
+   - ServiceNow API calls via MCP server
+   - Result formatting and error handling
+```
+
+### Key Architecture Components
+
+#### 1. **Enhanced Chat Handler with Approval**
+- **File**: `src/websocket/enhanced-chat-handler-with-approval.ts`
+- **Purpose**: Main business logic for chat processing with tool approval workflow
+- **Features**:
+  - Tool approval dialog system
+  - Conversation context management
+  - Retry logic with circuit breaker
+  - Strategic logging for monitoring
+
+#### 2. **MCP Client Adapter**
+- **Purpose**: Bridge between enhanced and legacy MCP clients
+- **Features**:
+  - Parameter transformation for ServiceNow tools
+  - Connection pooling
+  - Health monitoring
+
+#### 3. **Handler Registration System**
+- **File**: `src/websocket/enhanced-chat-handler.ts`
+- **Purpose**: Routes WebSocket events to appropriate handlers
+- **Features**:
+  - Clean handler identification logging
+  - Error handling with fallbacks
+  - User context management
+
+### Development Setup Enhancements
+
+#### Build Safeguards
+```json
+{
+  "scripts": {
+    "predev": "npm run clean:dist",
+    "dev": "npm run dev:enhanced", 
+    "prebuild": "npm run clean:dist",
+    "clean:dist": "rm -rf dist/",
+    "clean": "npm run clean:dist && rm -rf node_modules/.cache"
+  }
+}
+```
+
+#### Startup Banner
+When running in development mode, you'll see:
+```
+================================================================================
+🚀 ServiceNow MCP Web Application (Enhanced Mode)
+📝 Running from TypeScript source with ts-node-dev
+⚡ Live reload enabled - changes will restart automatically
+🔧 Debug logging: Enhanced handlers with strategic monitoring
+🏗️  Architecture: Multiple handler system with approval workflow
+================================================================================
+```
+
+#### Strategic Logging
+- **Info Level**: Message processing, tool execution, user actions
+- **Debug Level**: Session management, tool verification, LLM interactions
+- **Error Level**: Handler failures, MCP errors, authentication issues
+
+### Debugging Methodology
+
+If you encounter issues similar to the "stale compiled JS" problem:
+
+1. **Check the startup banner** - Ensures TypeScript source is running
+2. **Verify handler logs** - Strategic logging shows execution flow
+3. **Clear dist folder** - `npm run clean:dist` removes stale compiled files
+4. **Monitor MCP connections** - Pool statistics in startup diagnostics
+
+This architecture prevents debugging confusion by clearly indicating when TypeScript source is running versus compiled JavaScript, while maintaining clean, strategic logging for production monitoring.
+
 ## Recent Improvements
 
 ### Version 2.1 (Critical Bug Fixes - Latest)

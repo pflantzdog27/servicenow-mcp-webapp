@@ -1,9 +1,15 @@
 import { getMCPConnectionPool, PooledConnection } from './mcp-connection-pool';
 import { createLogger } from '../utils/logger';
 import { PrismaClient } from '@prisma/client';
+import { MCPParameterTransformer } from './mcp-parameter-transformer';
 
 const logger = createLogger();
 const prisma = new PrismaClient();
+
+// Version stamp for deployment verification
+const MODULE_VERSION = 'EnhancedMCPClient-2.1.0-PARAMETER-EXTRACTION';
+console.log(`🚀 [MODULE-LOAD] ${MODULE_VERSION} loaded at ${new Date().toISOString()}`);
+logger.info(`🚀 [MODULE-LOAD] ${MODULE_VERSION} - Enhanced parameter handling with user message extraction ACTIVE`);
 
 export interface MCPTool {
   name: string;
@@ -318,7 +324,7 @@ export class EnhancedMCPClient {
     return this.availableTools;
   }
 
-  async executeTool(toolCall: MCPToolCall, messageId?: string): Promise<MCPToolResult> {
+  async executeTool(toolCall: MCPToolCall, messageId?: string, userMessage?: string): Promise<MCPToolResult> {
     let connection: PooledConnection | null = null;
     const startTime = Date.now();
     
@@ -342,8 +348,15 @@ export class EnhancedMCPClient {
       logger.info(`[MCP-CLIENT] Executing tool: ${toolCall.name}`, { 
         arguments: toolCall.arguments,
         connectionId: connection.id,
-        messageId
+        messageId,
+        hasUserMessage: !!userMessage,
+        userMessageLength: userMessage?.length || 0
       });
+      
+      console.log(`🚀 [TOOL-EXECUTION] Starting tool: ${toolCall.name}`);
+      console.log(`🚀 [TOOL-EXECUTION] Arguments:`, toolCall.arguments);
+      console.log(`🚀 [TOOL-EXECUTION] User message available:`, !!userMessage);
+      console.log(`🚀 [FIX-VERIFICATION] Enhanced MCP client with parameter extraction: ACTIVE`);
       
       // Handle tool name translation - remove the servicenow-mcp: prefix for the actual MCP call
       const actualToolName = toolCall.name.replace('servicenow-mcp:', '');
@@ -355,17 +368,25 @@ export class EnhancedMCPClient {
         params: { name: actualToolName, arguments: toolCall.arguments }
       });
       
+      // Transform parameters before sending to MCP server
+      const transformedArguments = MCPParameterTransformer.transformParameters(
+        toolCall.name,
+        toolCall.arguments,
+        userMessage
+      );
+
       // Log the exact parameters being sent
-      logger.info(`[MCP-CLIENT] Calling tool with exact parameters:`, {
+      logger.info(`[ENHANCED-MCP-CLIENT] Parameter transformation applied:`, {
         originalToolName: toolCall.name,
         actualToolName: actualToolName,
-        argumentKeys: Object.keys(toolCall.arguments),
-        argumentValues: toolCall.arguments
+        originalArguments: toolCall.arguments,
+        transformedArguments: transformedArguments,
+        argumentKeys: Object.keys(transformedArguments)
       });
       
       const response = await connection.client.callTool({
         name: actualToolName,
-        arguments: toolCall.arguments
+        arguments: transformedArguments
       });
 
       const executionTime = Date.now() - startTime;

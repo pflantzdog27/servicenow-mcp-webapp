@@ -10,6 +10,7 @@ import { AuthenticatedSocket } from '../middleware/socketAuth';
 import { ContextAwareMessageHandler } from '../handlers/context-aware-handler';
 import { createLogger } from '../utils/logger';
 import { v4 as uuidv4 } from 'uuid';
+import { MCPParameterTransformer } from '../mcp/mcp-parameter-transformer';
 
 const logger = createLogger();
 const prisma = new PrismaClient();
@@ -189,8 +190,27 @@ export class ChatHandler {
               arguments: toolCall.arguments
             });
 
-            // Execute the tool
-            const toolResult = await this.mcpClientManager.executeTool(toolCall);
+            // Transform parameters before execution
+            const userMessageContent = session.messages[session.messages.length - 2]?.content || '';
+            const transformedArguments = MCPParameterTransformer.transformParameters(
+              toolCall.name,
+              toolCall.arguments,
+              userMessageContent
+            );
+
+            logger.info('[CHAT-HANDLER] Parameter transformation:', {
+              toolName: toolCall.name,
+              originalArguments: toolCall.arguments,
+              transformedArguments,
+              userMessage: userMessageContent
+            });
+
+            // Execute the tool with transformed parameters
+            const transformedToolCall = {
+              ...toolCall,
+              arguments: transformedArguments
+            };
+            const toolResult = await this.mcpClientManager.executeTool(transformedToolCall);
             
             // Update tool execution with result
             await prisma.toolExecution.update({

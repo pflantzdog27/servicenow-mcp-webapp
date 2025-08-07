@@ -1,5 +1,6 @@
 import { createLogger } from '../utils/logger';
 import { MCPProtocolManager, MCPTool, MCPInitializationResult } from './protocols/mcp-protocol';
+import { MCPParameterTransformer } from './mcp-parameter-transformer';
 
 const logger = createLogger();
 
@@ -85,11 +86,11 @@ export class MCPClientManager {
     return this.protocolManager.getServerInfo();
   }
 
-  async executeTool(toolCall: MCPToolCall): Promise<MCPToolResult> {
+  async executeTool(toolCall: MCPToolCall, messageId?: string, userMessage?: string): Promise<MCPToolResult> {
     return new Promise((resolve, reject) => {
       this.requestQueue.push(async () => {
         try {
-          const result = await this.executeToolInternal(toolCall);
+          const result = await this.executeToolInternal(toolCall, userMessage);
           resolve(result);
         } catch (error) {
           reject(error);
@@ -102,15 +103,26 @@ export class MCPClientManager {
     });
   }
 
-  private async executeToolInternal(toolCall: MCPToolCall): Promise<MCPToolResult> {
+  private async executeToolInternal(toolCall: MCPToolCall, userMessage?: string): Promise<MCPToolResult> {
     if (!this.protocolManager.isConnected()) {
       throw new Error('MCP client not connected');
     }
 
     try {
-      logger.info(`Executing MCP tool: ${toolCall.name}`, { arguments: toolCall.arguments });
+      // Transform parameters to match MCP server expectations
+      const transformedArguments = MCPParameterTransformer.transformParameters(
+        toolCall.name,
+        toolCall.arguments,
+        userMessage
+      );
+
+      logger.info(`[MCP-CLIENT] Executing tool with parameter transformation:`, {
+        toolName: toolCall.name,
+        originalArguments: toolCall.arguments,
+        transformedArguments
+      });
       
-      const response = await this.protocolManager.callTool(toolCall.name, toolCall.arguments);
+      const response = await this.protocolManager.callTool(toolCall.name, transformedArguments);
 
       logger.info(`MCP tool ${toolCall.name} completed successfully`);
       

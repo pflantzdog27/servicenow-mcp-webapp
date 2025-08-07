@@ -183,19 +183,35 @@ export class MCPProtocolManager {
       throw new Error('MCP client not properly initialized');
     }
 
-    logger.info(`Calling MCP tool: ${name}`, { arguments: arguments_ });
+    logger.info(`[WEB-APP] About to call MCP tool: ${name}`, { 
+      arguments: arguments_,
+      argumentsType: typeof arguments_,
+      argumentsLength: JSON.stringify(arguments_).length,
+      serializedArguments: JSON.stringify(arguments_)
+    });
 
     try {
-      const response = await this.client.callTool({
+      const toolCall = {
         name,
         arguments: arguments_
+      };
+      
+      logger.info(`[WEB-APP] Sending tool call to MCP server:`, { 
+        toolCall,
+        serialized: JSON.stringify(toolCall)
       });
 
-      logger.info(`MCP tool ${name} completed successfully`);
+      const response = await this.client.callTool(toolCall);
+
+      logger.info(`[WEB-APP] MCP tool ${name} completed successfully`, {
+        responseType: typeof response,
+        responseKeys: Object.keys(response || {}),
+        response: response
+      });
       return response;
 
     } catch (error) {
-      logger.error(`MCP tool ${name} failed:`, error);
+      logger.error(`[WEB-APP] MCP tool ${name} failed:`, error);
       throw error;
     }
   }

@@ -4,11 +4,17 @@
   "description": "Backend server for ServiceNow MCP web application",
   "main": "dist/app.js",
   "scripts": {
-    "dev": "ts-node-dev --respawn --transpile-only src/app-enhanced.ts",
+    "predev": "npm run clean:dist",
+    "dev": "npm run dev:enhanced",
+    "dev:enhanced": "ts-node-dev --respawn --transpile-only src/app-enhanced.ts",
     "dev:basic": "ts-node-dev --respawn --transpile-only src/app.ts",
+    "prebuild": "npm run clean:dist",
     "build": "tsc",
+    "prestart": "npm run build",
     "start": "node dist/app-enhanced.js",
     "start:basic": "node dist/app.js",
+    "clean:dist": "rm -rf dist/",
+    "clean": "npm run clean:dist && rm -rf node_modules/.cache",
     "test": "jest",
     "test:mcp": "ts-node src/test-mcp-connection.ts",
     "test:parameters": "ts-node src/test-mcp-parameters.ts"

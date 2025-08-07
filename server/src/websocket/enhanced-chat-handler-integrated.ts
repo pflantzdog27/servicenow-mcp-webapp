@@ -42,6 +42,7 @@ export class EnhancedChatHandlerIntegrated {
     const userId = socket.userId;
     
     // Handle new chat messages with enhanced streaming
+    console.log('[HANDLER-CHECK] enhanced-chat-handler-integrated.ts is handling this message');
     socket.on('chat:message', async (data: {
       message: string;
       model: string;

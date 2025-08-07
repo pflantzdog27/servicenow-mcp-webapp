@@ -64,15 +64,51 @@ export class AnthropicService extends LLMService {
 
       // Format tools for Claude's native tool calling
       const allTools = [...this.availableTools.mcp, ...this.availableTools.web];
-      const tools = allTools.length > 0 ? allTools.map(tool => ({
-        name: tool.name.replace('servicenow-mcp:', ''), // Strip prefix for Anthropic API compatibility
-        description: tool.description || 'No description available',
-        input_schema: tool.inputSchema
-      })) : undefined;
       
-      logger.info(`🔧 [ANTHROPIC-DEBUG] Formatted tools for Claude:`, {
+      // 🔍 DEBUG: Log raw tools before formatting
+      logger.info('🔧 [ANTHROPIC] Raw MCP tools before formatting:', {
+        mcpToolsCount: this.availableTools.mcp?.length || 0,
+        mcpToolNames: this.availableTools.mcp?.map(t => t.name) || [],
+        webToolsCount: this.availableTools.web?.length || 0,
+        webToolNames: this.availableTools.web?.map(t => t.name) || []
+      });
+
+      const tools = allTools.length > 0 ? allTools.map(tool => {
+        // 🔍 DEBUG: Log each tool's schema
+        logger.info('🔧 [ANTHROPIC] Processing tool for Claude:', {
+          originalName: tool.name,
+          strippedName: tool.name.replace('servicenow-mcp:', ''),
+          description: tool.description,
+          hasInputSchema: !!tool.inputSchema,
+          inputSchema: tool.inputSchema,
+          inputSchemaType: typeof tool.inputSchema,
+          inputSchemaKeys: tool.inputSchema ? Object.keys(tool.inputSchema) : []
+        });
+
+        const formattedTool = {
+          name: tool.name.replace('servicenow-mcp:', ''), // Strip prefix for Anthropic API compatibility
+          description: tool.description || 'No description available',
+          input_schema: tool.inputSchema || {
+            type: 'object',
+            properties: {},
+            required: []
+          }
+        };
+
+        // 🔍 DEBUG: Log formatted tool
+        logger.info('🔧 [ANTHROPIC] Formatted tool for Claude API:', {
+          name: formattedTool.name,
+          description: formattedTool.description,
+          input_schema: formattedTool.input_schema
+        });
+
+        return formattedTool;
+      }) : undefined;
+      
+      logger.info(`🔧 [ANTHROPIC-DEBUG] Final formatted tools for Claude:`, {
         formattedCount: tools ? tools.length : 0,
-        formattedToolNames: tools ? tools.map(t => t.name) : []
+        formattedToolNames: tools ? tools.map(t => t.name) : [],
+        toolsWithSchema: tools ? tools.filter(t => t.input_schema && Object.keys(t.input_schema.properties || {}).length > 0).length : 0
       });
       
       logger.info(`[ANTHROPIC] Prepared ${allTools.length} tools for API call:`, {

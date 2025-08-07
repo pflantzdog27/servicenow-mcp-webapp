@@ -26,6 +26,11 @@ import {
 const logger = createLogger();
 const prisma = new PrismaClient();
 
+// Version stamp for deployment verification
+const MODULE_VERSION = 'EnhancedChatHandlerWithApproval-2.1.0-USER-MESSAGE-EXTRACTION';
+console.log(`🚀 [MODULE-LOAD] ${MODULE_VERSION} loaded at ${new Date().toISOString()}`);
+logger.info(`🚀 [MODULE-LOAD] ${MODULE_VERSION} - User message extraction for emergency parameter handling ACTIVE`);
+
 export interface EnhancedChatMessage {
   id: string;
   role: 'user' | 'assistant';
@@ -43,6 +48,7 @@ export interface EnhancedChatSession {
   context: ConversationContext;
   pendingApprovals: Map<string, ToolApprovalRequest>;
   approvedTools: Set<string>;
+  lastUserMessage?: string;
 }
 
 export class EnhancedChatHandlerWithApproval {
@@ -61,72 +67,37 @@ export class EnhancedChatHandlerWithApproval {
   }
 
   async handleMessage(socket: AuthenticatedSocket, data: { message: string; model?: string }): Promise<void> {
-    console.log('\n🔍 [ENHANCED-HANDLER] Starting message handling');
-    console.log('🔍 [ENHANCED-HANDLER] Socket exists?', !!socket);
-    console.log('🔍 [ENHANCED-HANDLER] Socket user?', !!socket.user);
-    console.log('🔍 [ENHANCED-HANDLER] Data:', data);
+    logger.info('Enhanced chat handler processing message', {
+      userId: socket.user?.userId,
+      model: data.model,
+      messageLength: data.message?.length || 0,
+      toolsAvailable: this.mcpClientManager.getAvailableTools().length
+    });
     
     const socketId = socket.id;
     const userId = socket.user!.userId;
     const model = data.model || 'claude-sonnet-4-20250514';
     
-    console.log('🔍 [ENHANCED-HANDLER] MCP Client exists?', !!this.mcpClientManager);
-    
-    // Debug: Check available tools
-    const availableTools = this.mcpClientManager.getAvailableTools();
-    console.log('🔍 [ENHANCED-HANDLER] Raw MCP tools:', availableTools);
-    console.log('🔍 [ENHANCED-HANDLER] MCP tool count:', availableTools.length);
-    console.log('🔍 [ENHANCED-HANDLER] First tool example:', availableTools[0]);
-    
-    logger.info(`🔧 [DEBUG] Enhanced handler - Available tools: ${availableTools.length}`, {
-      toolNames: availableTools.map(t => t.name)
-    });
-    
-    logger.info(`Enhanced handler processing message from ${socketId}:`, { 
-      message: data.message, 
-      model,
-      userId 
-    });
-    
     try {
-      console.log('🔍 [ENHANCED-HANDLER] About to get/create session');
-      
       // Get or create session
       let session = this.sessions.get(socketId);
-      console.log('🔍 [ENHANCED-HANDLER] Existing session?', !!session);
-      
       if (!session) {
-        console.log('🔍 [ENHANCED-HANDLER] Creating new session...');
         session = await this.createSession(model, userId);
         this.sessions.set(socketId, session);
-        console.log('🔍 [ENHANCED-HANDLER] New session created');
+        logger.debug('Created new chat session', { userId, model });
       }
       
-      console.log('🔍 [ENHANCED-HANDLER] Session LLM service exists?', !!session.llmService);
-      
-      // CRITICAL: Always update LLM service with latest tools on every message
+      // Always update LLM service with latest tools on every message
       const mcpTools = this.mcpClientManager.getAvailableTools();
-      console.log('🔍 [ENHANCED-HANDLER] MCP tools for setting:', mcpTools.length);
-      
       const allAvailableTools = {
         mcp: mcpTools,
         web: [] // No web tools in enhanced version for now
       };
-      console.log('🔍 [ENHANCED-HANDLER] Setting tools on LLM service:', allAvailableTools);
-      
       session.llmService.setAvailableTools(allAvailableTools);
-      console.log('🔍 [ENHANCED-HANDLER] Tools set successfully');
       
-      // Verify tools were set
-      console.log('🔍 [ENHANCED-HANDLER] Verifying tools were set...');
-      const verifyTools = session.llmService.availableTools || {};
-      console.log('🔍 [ENHANCED-HANDLER] Tools after setting:', {
-        mcpCount: verifyTools.mcp?.length || 0,
-        webCount: verifyTools.web?.length || 0
-      });
-      
-      logger.info(`🔧 [DEBUG] Tools set on LLM service: MCP=${mcpTools.length}, Web=0`, {
-        mcpToolNames: mcpTools.map(t => t.name)
+      logger.debug('Tools set on LLM service', {
+        mcpCount: mcpTools.length,
+        webCount: 0
       });
 
       // Create user message in database
@@ -148,6 +119,17 @@ export class EnhancedChatHandlerWithApproval {
       };
       session.messages.push(userMessage);
       session.context.messages.push(userMessage);
+      
+      // Store the latest user message for parameter extraction
+      session.lastUserMessage = data.message;
+      
+      logger.info(`📝 [USER-MESSAGE] Stored user message for parameter extraction:`, {
+        messageLength: data.message.length,
+        messagePreview: data.message.substring(0, 100) + (data.message.length > 100 ? '...' : ''),
+        sessionId: socketId
+      });
+      console.log(`📝 [USER-MESSAGE] Message stored: "${data.message}"`);
+      console.log(`📝 [FIX-VERIFICATION] User message capture for emergency extraction: ACTIVE`);
 
       // Auto-generate session title if first message
       if (session.messages.length === 1) {
@@ -248,6 +230,11 @@ export class EnhancedChatHandlerWithApproval {
     
     try {
       // Generate response with tool awareness
+      logger.debug('Calling LLM service', { 
+        messageCount: llmMessages.length,
+        model: session.model 
+      });
+      
       const response = await session.llmService.generateResponse(
         llmMessages,
         (chunk) => {
@@ -262,10 +249,20 @@ export class EnhancedChatHandlerWithApproval {
         }
       );
 
+      logger.info('LLM response received', {
+        hasToolCalls: !!(response.toolCalls && response.toolCalls.length > 0),
+        toolCallsCount: response.toolCalls?.length || 0,
+        responseLength: response.message?.length || 0
+      });
+
       assistantMessage.content = response.message;
 
       // Handle tool calls with approval workflow
       if (response.toolCalls && response.toolCalls.length > 0) {
+        logger.info('Processing tool calls with approval workflow', {
+          toolCallCount: response.toolCalls.length,
+          toolNames: response.toolCalls.map(tc => tc.name)
+        });
         await this.handleToolCallsWithApproval(socket, session, assistantMessage, response.toolCalls);
       } else {
         // No tool calls, complete the message
@@ -288,7 +285,27 @@ export class EnhancedChatHandlerWithApproval {
     assistantMessage: EnhancedChatMessage,
     toolCalls: MCPToolCall[]
   ): Promise<void> {
+    // 🔍 DEBUG: Log what Claude is sending
+    logger.info('🔍 [TOOL-CALL] Tool calls received from Claude:', {
+      count: toolCalls.length,
+      toolCalls: toolCalls.map(tc => ({
+        name: tc.name,
+        arguments: tc.arguments,
+        argumentsType: typeof tc.arguments,
+        argumentsKeys: tc.arguments ? Object.keys(tc.arguments) : [],
+        argumentsEmpty: !tc.arguments || Object.keys(tc.arguments).length === 0
+      }))
+    });
+
     for (const toolCall of toolCalls) {
+      // 🔍 DEBUG: Log individual tool call processing
+      logger.info('🔍 [TOOL-CALL] Processing individual tool call:', {
+        toolName: toolCall.name,
+        rawArguments: JSON.stringify(toolCall.arguments),
+        argumentsType: typeof toolCall.arguments,
+        argumentsEmpty: !toolCall.arguments || Object.keys(toolCall.arguments || {}).length === 0
+      });
+
       const toolExecutionStatus: MCPToolExecutionStatus = {
         id: uuidv4(),
         toolName: toolCall.name,
@@ -420,13 +437,33 @@ export class EnhancedChatHandlerWithApproval {
       });
 
       // Execute the tool with retry logic
+      logger.info('Executing tool with retry logic', {
+        toolName: toolStatus.toolName,
+        hasArguments: !!(toolStatus.arguments && Object.keys(toolStatus.arguments).length > 0)
+      });
+      
       const result = await RetryManager.retry(async () => {
         const toolCall: MCPToolCall = {
           name: toolStatus.toolName,
           arguments: toolStatus.arguments
         };
         
-        return await this.mcpClientManager.executeTool(toolCall);
+        logger.info(`🔧 [TOOL-EXECUTION] Calling MCP client with user message:`, {
+          toolName: toolCall.name,
+          hasArguments: !!(toolCall.arguments && Object.keys(toolCall.arguments).length > 0),
+          hasUserMessage: !!session.lastUserMessage,
+          userMessagePreview: session.lastUserMessage?.substring(0, 50) + '...'
+        });
+        console.log(`🔧 [TOOL-EXECUTION] Executing ${toolCall.name} with user message context`);
+        console.log(`🔧 [FIX-VERIFICATION] Passing user message to MCP client for emergency extraction: ACTIVE`);
+        
+        const mcpResult = await this.mcpClientManager.executeTool(toolCall, messageId, session.lastUserMessage);
+        logger.debug('Tool execution completed', {
+          toolName: toolStatus.toolName,
+          isError: mcpResult.isError
+        });
+        
+        return mcpResult;
       }, {
         maxRetries: 2,
         baseDelay: 1000
@@ -498,6 +535,19 @@ export class EnhancedChatHandlerWithApproval {
         });
       } catch (dbError) {
         logger.error('Failed to save tool execution error to database:', dbError);
+      }
+    }
+
+    // CRITICAL FIX: Check if all tools in the message are completed
+    const message = session.messages.find(m => m.id === messageId);
+    if (message && message.toolCalls) {
+      const allCompleted = message.toolCalls.every(tc => 
+        tc.status === 'completed' || tc.status === 'error'
+      );
+      
+      if (allCompleted) {
+        logger.info('All tools completed, calling completeMessage', { messageId });
+        await this.completeMessage(socket, session, message);
       }
     }
   }

@@ -78,6 +78,7 @@ export class ChatHandler {
 
     // Also setup legacy handlers for backward compatibility
     socket.on('chat:message', async (data) => {
+      console.log('[HANDLER-CHECK] chat-handler-updated.ts is handling this message');
       try {
         await this.handleMessage(socket, data);
       } catch (error) {

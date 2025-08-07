@@ -11,6 +11,12 @@ import {
   Clock
 } from 'lucide-react';
 
+// Version stamp for deployment verification
+const COMPONENT_VERSION = 'ToolInvocation-2.1.0-FIXED';
+console.log(`🔧 [COMPONENT-LOAD] ${COMPONENT_VERSION} loaded at ${new Date().toISOString()}`);
+console.log(`🔧 [FIX-VERIFICATION] Tool name display fix: ACTIVE - Shows "ServiceNow: [Tool Name]"`);
+console.log(`🔧 [FIX-VERIFICATION] sys_id extraction and display: ACTIVE - Shows record IDs for chaining`);
+
 interface ToolCall {
   id?: string;
   name: string;
@@ -34,13 +40,31 @@ const ToolInvocation: React.FC<ToolInvocationProps> = ({
   const [isExpanded, setIsExpanded] = React.useState(defaultExpanded);
   
   const getToolDisplayName = (name: string) => {
+    console.log(`🔧 [TOOL-DISPLAY] Processing tool name: "${name}"`);
+    
     if (name === 'web_search') return 'Web Search';
     if (name === 'web_fetch') return 'Web Fetch';
     
-    return name.replace('servicenow-mcp:', '')
+    // Keep the servicenow-mcp: prefix for clarity, just format it nicely
+    if (name.startsWith('servicenow-mcp:')) {
+      const cleanName = name.replace('servicenow-mcp:', '');
+      const displayName = `ServiceNow: ${cleanName
+        .split('-')
+        .map(word => word.charAt(0).toUpperCase() + word.slice(1))
+        .join(' ')}`;
+      
+      console.log(`🔧 [TOOL-DISPLAY] ServiceNow tool detected: "${name}" → "${displayName}"`);
+      console.log(`🔧 [FIX-ACTIVE] Tool name fix is working - showing ServiceNow prefix!`);
+      return displayName;
+    }
+    
+    const fallbackName = name
       .split('-')
       .map(word => word.charAt(0).toUpperCase() + word.slice(1))
       .join(' ');
+    
+    console.log(`🔧 [TOOL-DISPLAY] Non-ServiceNow tool: "${name}" → "${fallbackName}"`);
+    return fallbackName;
   };
 
   const getToolIcon = () => {
@@ -193,7 +217,16 @@ const ToolInvocation: React.FC<ToolInvocationProps> = ({
     if (!result || !result.content) return null;
     const content = result.content[0]?.text || '';
     const sysIdMatch = content.match(/sys_id['":\s]*([a-f0-9]{32})/i);
-    return sysIdMatch ? sysIdMatch[1] : null;
+    const sysId = sysIdMatch ? sysIdMatch[1] : null;
+    
+    if (sysId) {
+      console.log(`🔧 [SYS-ID-EXTRACTION] Found sys_id: ${sysId} from content length: ${content.length}`);
+      console.log(`🔧 [FIX-ACTIVE] sys_id extraction fix is working - enabling tool chaining!`);
+    } else {
+      console.log(`🔧 [SYS-ID-EXTRACTION] No sys_id found in result content`);
+    }
+    
+    return sysId;
   };
 
   const generateServiceNowLink = (sysId: string) => {
@@ -296,9 +329,16 @@ const ToolInvocation: React.FC<ToolInvocationProps> = ({
                 </div>
               )}
               
-              {/* ServiceNow Link - only for ServiceNow tools */}
+              {/* ServiceNow Link and sys_id - only for ServiceNow tools */}
               {serviceNowLink && toolCall.status === 'completed' && !toolCall.name.startsWith('web_') && (
-                <div className="mt-3 pt-3 border-t border-gray-700/50">
+                <div className="mt-3 pt-3 border-t border-gray-700/50 space-y-2">
+                  {sysId && (
+                    <div className="text-xs bg-blue-900/20 border border-blue-800/50 rounded px-2 py-1">
+                      <span className="text-blue-300 font-medium">Record ID:</span>{' '}
+                      <span className="text-blue-100 font-mono">{sysId}</span>
+                      <span className="text-blue-400 ml-2">(use this for follow-up operations)</span>
+                    </div>
+                  )}
                   <a
                     href={serviceNowLink}
                     target="_blank"

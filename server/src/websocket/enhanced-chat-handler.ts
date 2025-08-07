@@ -89,8 +89,11 @@ export function setupEnhancedChatHandlers(io: Server, socket: SocketWithUser) {
   
   // Handle chat messages using the enhanced handler
   socket.on('chat:message', async (data: ChatMessage) => {
-    console.log('🚨 [ENHANCED-HANDLER] Received chat:message event');
-    console.log('🚨 [ENHANCED-HANDLER] About to call enhanced handler with approval...');
+    logger.info('Processing chat message', { 
+      userId: socket.userId, 
+      model: data.model,
+      messageLength: data.message?.length || 0 
+    });
     
     try {
       // Convert socket format to match what the handler expects
@@ -102,9 +105,8 @@ export function setupEnhancedChatHandlers(io: Server, socket: SocketWithUser) {
       };
       
       await enhancedHandler.handleMessage(socketWithUser, data);
-      console.log('🚨 [ENHANCED-HANDLER] Enhanced handler completed successfully!');
+      logger.debug('Enhanced handler completed successfully', { userId: socket.userId });
     } catch (error) {
-      console.error('🚨 [ENHANCED-HANDLER] Enhanced handler FAILED:', error);
       logger.error('Enhanced handler failed:', error);
       socket.emit('error', { message: 'Failed to process message' });
     }
